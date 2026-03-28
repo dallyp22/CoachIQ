@@ -1,0 +1,4 @@
+fastapi>=0.115
+google-api-python-client>=2.160
+google-auth>=2.38
+google-auth-oauthlib>=1.2

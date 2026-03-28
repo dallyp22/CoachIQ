@@ -1,0 +1,15 @@
+test_transcripts/
+backfill_transcripts/
+tests/
+.git/
+.env
+*.json
+!pyproject.toml
+__pycache__/
+.pytest_cache/
+*.pyc
+backfill*.py
+seed_registry.py
+auth_drive.py
+todd-*.md
+CoachIQ_PRD_v2.0.md

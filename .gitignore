@@ -1,0 +1,32 @@
+# Secrets — NEVER commit
+.env
+service-account.json
+oauth_client.json
+todd_drive_token.json
+client_registry.json
+*storage_state.json
+
+# Local data
+data/
+test_transcripts/
+backfill_transcripts/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+uv.lock
+
+# Scripts (dev only, not needed in deployment)
+backfill*.py
+seed_registry.py
+auth_drive.py
+
+# Docs
+todd-*.md
+CoachIQ_PRD_v2.0.md
+
+# OS
+.DS_Store
