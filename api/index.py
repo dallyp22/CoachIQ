@@ -321,14 +321,10 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
     }
 
 
-@app.get("/health")
-async def health(request: Request, token: str = ""):
-    # Also check query string directly (Vercel ASGI compat)
-    from urllib.parse import parse_qs
-    qs = parse_qs(request.scope.get("query_string", b"").decode())
-    token = token or qs.get("token", [""])[0]
+@app.get("/health/{token}")
+async def health(token: str):
     if token != HEALTH_TOKEN:
-        raise HTTPException(status_code=403, detail=f"Invalid token")
+        raise HTTPException(status_code=403, detail="Invalid token")
 
     registry = _load_registry()
     return {
