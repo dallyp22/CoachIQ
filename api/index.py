@@ -336,6 +336,20 @@ async def health(token: str):
     }
 
 
+@app.get("/debug")
+async def debug():
+    return {
+        "health_token_set": bool(HEALTH_TOKEN),
+        "health_token_len": len(HEALTH_TOKEN),
+        "health_token_default": HEALTH_TOKEN == "change-me",
+        "drive_configured": bool(DRIVE_TOKEN_JSON),
+        "registry_configured": bool(CLIENT_REGISTRY_JSON),
+        "registry_count": len(_load_registry()),
+        "fathom_key_set": bool(FATHOM_API_KEY),
+        "webhook_secret_set": bool(WEBHOOK_SECRET),
+    }
+
+
 @app.get("/")
 async def root():
     return {"app": "CoachIQ", "version": "0.1.0", "status": "running"}
