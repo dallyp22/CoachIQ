@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -323,6 +323,9 @@ export function ClientDossier({ client }: { client: ClientData }) {
         )}
       </div>
 
+      {/* Prep Brief */}
+      <PrepBriefSection clientId={client.id} clientName={client.name} hasSessions={client.sessions.length > 0} />
+
       {/* Session Timeline */}
       <div className="mt-8">
         <h2 className="font-display text-xl text-foreground mb-4">
@@ -391,6 +394,98 @@ export function ClientDossier({ client }: { client: ClientData }) {
           <BillingRow label="Rate" value={`$${client.hourlyRate}/hr`} />
         </div>
       </div>
+    </div>
+  );
+}
+
+function PrepBriefSection({
+  clientId,
+  clientName,
+  hasSessions,
+}: {
+  clientId: string;
+  clientName: string;
+  hasSessions: boolean;
+}) {
+  const [brief, setBrief] = useState<string | null>(null);
+  const [briefDate, setBriefDate] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/clients/${clientId}/prep-brief`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.brief) {
+          setBrief(data.brief.content);
+          setBriefDate(data.brief.createdAt);
+        }
+        setLoaded(true);
+      });
+  }, [clientId]);
+
+  async function handleGenerate() {
+    setGenerating(true);
+    try {
+      const resp = await fetch(`/api/clients/${clientId}/prep-brief`, {
+        method: "POST",
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        setBrief(data.brief.content);
+        setBriefDate(data.brief.createdAt);
+      } else {
+        alert(data.error || "Failed to generate brief");
+      }
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  if (!loaded) return null;
+
+  return (
+    <div className="mt-8">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="font-display text-xl text-foreground">Prep Brief</h2>
+        {hasSessions && (
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="px-4 py-2 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors disabled:opacity-50"
+          >
+            {generating ? "Generating..." : brief ? "Regenerate" : "Generate Brief"}
+          </button>
+        )}
+      </div>
+
+      {brief ? (
+        <div className="bg-surface border border-border border-l-3 border-l-accent rounded-r-[var(--radius-md)] p-5">
+          <div className="prose prose-sm max-w-none text-foreground text-sm leading-relaxed whitespace-pre-line [&_strong]:font-semibold [&_strong]:text-foreground">
+            {brief}
+          </div>
+          {briefDate && (
+            <p className="text-xs text-muted mt-4">
+              Generated{" "}
+              {new Date(briefDate).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            </p>
+          )}
+        </div>
+      ) : hasSessions ? (
+        <p className="text-sm text-muted">
+          Click &quot;Generate Brief&quot; to create an AI-powered prep brief from{" "}
+          {clientName.split(" ")[0]}&apos;s recent sessions.
+        </p>
+      ) : (
+        <p className="text-sm text-muted">
+          Prep briefs are generated from session history. No sessions recorded yet.
+        </p>
+      )}
     </div>
   );
 }
