@@ -228,11 +228,14 @@ model CoachSettings {
   defaultBillingCadence BillingCadence  @default(MONTHLY)
   billingDayOfWeek      Int             @default(1)
   stripeAccountId       String?
+  stripeSecretKey       String?
   googleCalendarId      String?
   fathomWebhookSecret   String?
   coachingTitleFilter   String?
   briefDeliveryMinutes  Int             @default(30)
   nlmLastSynced         DateTime?
+  openaiApiKey          String?
+  anthropicApiKey       String?
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 
