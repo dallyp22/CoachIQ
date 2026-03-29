@@ -1,0 +1,424 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+
+interface Session {
+  id: string;
+  title: string;
+  date: string;
+  durationMinutes: number;
+  billableMinutes: number;
+  recordingUrl: string | null;
+  synopsis: string | null;
+}
+
+interface ClientData {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  company: string | null;
+  hourlyRate: number;
+  billingCadence: string;
+  meetingCadence: string;
+  status: string;
+  notes: string | null;
+  tags: string[];
+  sessionCount: number;
+  notebookId: string | null;
+  driveFolderId: string | null;
+  sessions: Session[];
+}
+
+export function ClientDossier({ client }: { client: ClientData }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    name: client.name,
+    email: client.email,
+    phone: client.phone || "",
+    company: client.company || "",
+    hourlyRate: String(client.hourlyRate),
+    billingCadence: client.billingCadence,
+    meetingCadence: client.meetingCadence,
+    status: client.status,
+    notes: client.notes || "",
+  });
+
+  const totalBilledHours = client.sessions.reduce(
+    (sum, s) => sum + s.billableMinutes / 60,
+    0
+  );
+
+  function updateField(field: string, value: string) {
+    setForm({ ...form, [field]: value });
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await fetch(`/api/clients/${client.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.name,
+          email: form.email,
+          phone: form.phone || null,
+          company: form.company || null,
+          hourlyRate: form.hourlyRate,
+          billingCadence: form.billingCadence,
+          meetingCadence: form.meetingCadence,
+          status: form.status,
+          notes: form.notes || null,
+        }),
+      });
+      setEditing(false);
+      router.refresh();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleCancel() {
+    setForm({
+      name: client.name,
+      email: client.email,
+      phone: client.phone || "",
+      company: client.company || "",
+      hourlyRate: String(client.hourlyRate),
+      billingCadence: client.billingCadence,
+      meetingCadence: client.meetingCadence,
+      status: client.status,
+      notes: client.notes || "",
+    });
+    setEditing(false);
+  }
+
+  return (
+    <div>
+      <Link
+        href="/clients"
+        className="text-sm text-muted hover:text-accent transition-colors"
+      >
+        &larr; All Clients
+      </Link>
+
+      {/* Profile Header */}
+      <div className="mt-4 pb-6 border-b border-border">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            {editing ? (
+              <div className="space-y-3">
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="text-xs text-muted font-medium">Name</label>
+                    <input
+                      type="text"
+                      value={form.name}
+                      onChange={(e) => updateField("name", e.target.value)}
+                      className="mt-1 w-full bg-background border border-border rounded px-3 py-2 font-display text-2xl outline-none focus:border-accent"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-xs text-muted font-medium">Company</label>
+                    <input
+                      type="text"
+                      value={form.company}
+                      onChange={(e) => updateField("company", e.target.value)}
+                      placeholder="Company name"
+                      className="mt-1 w-full bg-background border border-border rounded px-3 py-2 text-sm outline-none focus:border-accent"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="text-xs text-muted font-medium">Email</label>
+                    <input
+                      type="email"
+                      value={form.email}
+                      onChange={(e) => updateField("email", e.target.value)}
+                      className="mt-1 w-full bg-background border border-border rounded px-3 py-2 text-sm font-mono outline-none focus:border-accent"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-xs text-muted font-medium">Phone</label>
+                    <input
+                      type="tel"
+                      value={form.phone}
+                      onChange={(e) => updateField("phone", e.target.value)}
+                      placeholder="Phone number"
+                      className="mt-1 w-full bg-background border border-border rounded px-3 py-2 text-sm outline-none focus:border-accent"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <div>
+                    <label className="text-xs text-muted font-medium">Hourly Rate</label>
+                    <div className="mt-1 flex items-center">
+                      <span className="text-sm text-muted mr-1">$</span>
+                      <input
+                        type="number"
+                        value={form.hourlyRate}
+                        onChange={(e) => updateField("hourlyRate", e.target.value)}
+                        className="w-24 bg-background border border-border rounded px-3 py-2 text-sm font-mono outline-none focus:border-accent"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted font-medium">Billing Cadence</label>
+                    <select
+                      value={form.billingCadence}
+                      onChange={(e) => updateField("billingCadence", e.target.value)}
+                      className="mt-1 bg-background border border-border rounded px-3 py-2 text-sm outline-none focus:border-accent"
+                    >
+                      <option value="WEEKLY">Weekly</option>
+                      <option value="BIWEEKLY">Biweekly</option>
+                      <option value="MONTHLY">Monthly</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted font-medium">Meeting Cadence</label>
+                    <select
+                      value={form.meetingCadence}
+                      onChange={(e) => updateField("meetingCadence", e.target.value)}
+                      className="mt-1 bg-background border border-border rounded px-3 py-2 text-sm outline-none focus:border-accent"
+                    >
+                      <option value="WEEKLY">Weekly</option>
+                      <option value="BIWEEKLY">Biweekly</option>
+                      <option value="MONTHLY">Monthly</option>
+                      <option value="AD_HOC">Ad Hoc</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted font-medium">Status</label>
+                    <select
+                      value={form.status}
+                      onChange={(e) => updateField("status", e.target.value)}
+                      className="mt-1 bg-background border border-border rounded px-3 py-2 text-sm outline-none focus:border-accent"
+                    >
+                      <option value="ACTIVE">Active</option>
+                      <option value="PAUSED">Paused</option>
+                      <option value="CHURNED">Churned</option>
+                      <option value="PROSPECT">Prospect</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-muted font-medium">Notes</label>
+                  <textarea
+                    value={form.notes}
+                    onChange={(e) => updateField("notes", e.target.value)}
+                    placeholder="Private coaching notes..."
+                    rows={3}
+                    className="mt-1 w-full bg-background border border-border rounded px-3 py-2 text-sm outline-none focus:border-accent resize-none"
+                  />
+                </div>
+              </div>
+            ) : (
+              <>
+                <h1 className="font-display text-4xl text-foreground leading-tight">
+                  {client.name}
+                </h1>
+                {client.company && (
+                  <p className="text-base text-muted mt-1">{client.company}</p>
+                )}
+                {client.notes && (
+                  <p className="text-sm text-muted mt-2 italic">{client.notes}</p>
+                )}
+              </>
+            )}
+          </div>
+          <div className="flex gap-2 shrink-0 mt-1">
+            {!editing && (
+              <>
+                {client.notebookId ? (
+                  <a
+                    href={`https://notebooklm.google.com/notebook/${client.notebookId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-4 py-2 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors"
+                  >
+                    <NotebookIcon className="w-4 h-4" />
+                    Open Notebook
+                  </a>
+                ) : (
+                  <span className="flex items-center gap-2 px-4 py-2 bg-surface border border-border text-muted text-sm font-medium rounded cursor-default" title="Notebook ID not linked yet">
+                    <NotebookIcon className="w-4 h-4" />
+                    Notebook not linked
+                  </span>
+                )}
+                {client.driveFolderId && (
+                  <a
+                    href={`https://drive.google.com/drive/folders/${client.driveFolderId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-4 py-2 border border-border text-foreground text-sm font-medium rounded hover:border-accent hover:text-accent transition-colors"
+                  >
+                    Drive
+                  </a>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Edit/Save buttons */}
+        <div className="mt-4 flex gap-2">
+          {editing ? (
+            <>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="px-4 py-2 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors disabled:opacity-50"
+              >
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+              <button
+                onClick={handleCancel}
+                className="px-4 py-2 border border-border text-foreground text-sm font-medium rounded hover:border-accent transition-colors"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={() => setEditing(true)}
+              className="px-4 py-2 border border-border text-muted text-sm font-medium rounded hover:border-accent hover:text-accent transition-colors"
+            >
+              Edit Profile
+            </button>
+          )}
+        </div>
+
+        {!editing && (
+          <div className="flex flex-wrap gap-6 mt-5">
+            <MetaStat label="Sessions" value={String(client.sessionCount)} />
+            <MetaStat
+              label="Since"
+              value={
+                client.sessions.length > 0
+                  ? new Date(
+                      client.sessions[client.sessions.length - 1].date
+                    ).toLocaleDateString("en-US", {
+                      month: "short",
+                      year: "numeric",
+                    })
+                  : "—"
+              }
+            />
+            <MetaStat label="Rate" value={`$${client.hourlyRate}/hr`} />
+            <MetaStat
+              label="Cadence"
+              value={client.meetingCadence.charAt(0) + client.meetingCadence.slice(1).toLowerCase()}
+            />
+            <MetaStat
+              label="Status"
+              value={client.status.charAt(0) + client.status.slice(1).toLowerCase()}
+              accent
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Session Timeline */}
+      <div className="mt-8">
+        <h2 className="font-display text-xl text-foreground mb-4">
+          Recent Sessions
+        </h2>
+
+        {client.sessions.length === 0 ? (
+          <div className="py-12 text-center">
+            <p className="font-display text-lg text-foreground">
+              No sessions recorded yet for {client.name.split(" ")[0]}
+            </p>
+            <p className="text-sm text-muted mt-2">
+              Sessions appear automatically when Fathom processes a coaching recording.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-0">
+            {client.sessions.map((session) => (
+              <div
+                key={session.id}
+                className="grid grid-cols-[90px_1fr] gap-4 py-3 border-b border-border last:border-b-0"
+              >
+                <span className="font-mono text-xs text-muted pt-0.5">
+                  {new Date(session.date).toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </span>
+                <div>
+                  <h3 className="text-sm font-medium text-foreground">
+                    {session.title}
+                  </h3>
+                  {session.synopsis && (
+                    <p className="text-sm text-muted mt-1 line-clamp-2">
+                      {session.synopsis}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-3 mt-2">
+                    <span className="font-mono text-xs text-muted bg-surface border border-border px-2 py-0.5 rounded">
+                      {session.durationMinutes} min
+                    </span>
+                    {session.recordingUrl && (
+                      <a
+                        href={session.recordingUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-accent hover:underline"
+                      >
+                        View Recording
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Billing Summary */}
+      <div className="mt-10">
+        <h2 className="font-display text-xl text-foreground mb-4">Billing</h2>
+        <div className="space-y-0">
+          <BillingRow label="Total Sessions" value={`${client.sessionCount} sessions`} />
+          <BillingRow label="Total Hours" value={`${totalBilledHours.toFixed(1)} hrs`} />
+          <BillingRow label="Rate" value={`$${client.hourlyRate}/hr`} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MetaStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div>
+      <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{label}</p>
+      <p className={`font-mono text-sm font-medium ${accent ? "text-accent" : "text-foreground"}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function BillingRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between items-center py-2 border-b border-border last:border-b-0">
+      <span className="text-sm text-muted">{label}</span>
+      <span className="font-mono text-sm font-medium text-foreground">{value}</span>
+    </div>
+  );
+}
+
+function NotebookIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+    </svg>
+  );
+}

@@ -28,6 +28,17 @@ auth_drive.py
 todd-*.md
 CoachIQ_PRD_v2.0.md
 
+# Next.js
+.next/
+out/
+node_modules/
+
 # OS
 .DS_Store
 .vercel
+.gstack/
+
+/src/generated/prisma
+
+# clerk configuration (can include secrets)
+/.clerk/

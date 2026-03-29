@@ -1,0 +1,258 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector, pgcrypto]
+}
+
+// ─── ENUMS ────────────────────────────────────────────
+
+enum ClientStatus {
+  ACTIVE
+  PAUSED
+  CHURNED
+  PROSPECT
+}
+
+enum BillingCadence {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+}
+
+enum MeetingCadence {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  AD_HOC
+}
+
+enum SessionStatus {
+  CAPTURED
+  REVIEWED
+  BILLED
+  ARCHIVED
+}
+
+enum TimeEntryStatus {
+  UNBILLED
+  STAGED
+  INVOICED
+  PAID
+  WRITTEN_OFF
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  SENT
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum JobType {
+  GENERATE_EMBEDDING
+  GENERATE_SYNOPSIS
+  GENERATE_BRIEF
+  INJECT_NLM
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ─── MODELS ───────────────────────────────────────────
+
+model Client {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String
+  email            String          @unique
+  secondaryEmails  String[]        @default([])
+  phone            String?
+  company          String?
+  address          Json?
+  hourlyRate       Decimal         @default(300) @db.Decimal(10, 2)
+  billingCadence   BillingCadence  @default(MONTHLY)
+  meetingCadence   MeetingCadence  @default(BIWEEKLY)
+  stripeCustomerId String?
+  notebookId       String?
+  driveFolderId    String?
+  status           ClientStatus    @default(ACTIVE)
+  notes            String?
+  tags             String[]        @default([])
+  sessionCount     Int             @default(0)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  sessions    Session[]
+  transcripts Transcript[]
+  timeEntries TimeEntry[]
+  invoices    Invoice[]
+  prepBriefs  PrepBrief[]
+
+  @@index([status])
+  @@index([email])
+  @@map("clients")
+}
+
+model Session {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId          String        @db.Uuid
+  fathomRecordingId String        @unique
+  title             String
+  date              DateTime
+  durationMinutes   Int
+  billableMinutes   Int
+  recordingUrl      String?
+  shareUrl          String?
+  fathomSummary     String?
+  actionItems       Json?
+  synopsis          String?
+  transcriptDriveId String?
+  nlmInjected       Boolean       @default(false)
+  calendarEventId   String?
+  status            SessionStatus @default(CAPTURED)
+  createdAt         DateTime      @default(now())
+
+  client     Client      @relation(fields: [clientId], references: [id])
+  transcript Transcript?
+  timeEntry  TimeEntry?
+
+  @@index([clientId, date(sort: Desc)])
+  @@index([fathomRecordingId])
+  @@map("sessions")
+}
+
+model Transcript {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId      String   @unique @db.Uuid
+  clientId       String   @db.Uuid
+  fullText       String
+  rawSegments    Json?
+  wordCount      Int      @default(0)
+  speakerStats   Json?
+  embeddingModel String?
+  topics         String[] @default([])
+  createdAt      DateTime @default(now())
+
+  // pgvector embedding stored via raw SQL (Prisma doesn't natively support vector type)
+  // Column: embedding vector(1536) — managed via migration SQL
+
+  session Session @relation(fields: [sessionId], references: [id])
+  client  Client  @relation(fields: [clientId], references: [id])
+
+  @@index([clientId, createdAt(sort: Desc)])
+  @@map("transcripts")
+}
+
+model TimeEntry {
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId     String?         @unique @db.Uuid
+  clientId      String          @db.Uuid
+  date          DateTime
+  description   String?
+  billableHours Decimal         @db.Decimal(5, 2)
+  hourlyRate    Decimal         @db.Decimal(10, 2)
+  amount        Decimal         @db.Decimal(10, 2)
+  isManual      Boolean         @default(false)
+  status        TimeEntryStatus @default(UNBILLED)
+  invoiceId     String?         @db.Uuid
+  createdAt     DateTime        @default(now())
+
+  session Session? @relation(fields: [sessionId], references: [id])
+  client  Client   @relation(fields: [clientId], references: [id])
+  invoice Invoice? @relation(fields: [invoiceId], references: [id])
+
+  @@index([clientId, status])
+  @@index([status])
+  @@map("time_entries")
+}
+
+model Invoice {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId         String        @db.Uuid
+  invoiceNumber    String        @unique
+  periodStart      DateTime
+  periodEnd        DateTime
+  lineItems        Json
+  subtotal         Decimal       @db.Decimal(10, 2)
+  tax              Decimal       @default(0) @db.Decimal(10, 2)
+  total            Decimal       @db.Decimal(10, 2)
+  status           InvoiceStatus @default(DRAFT)
+  stripeInvoiceId  String?
+  stripePaymentUrl String?
+  sentAt           DateTime?
+  paidAt           DateTime?
+  notes            String?
+  createdAt        DateTime      @default(now())
+
+  client     Client      @relation(fields: [clientId], references: [id])
+  timeEntries TimeEntry[]
+
+  @@index([clientId])
+  @@index([status])
+  @@map("invoices")
+}
+
+model PrepBrief {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId          String    @db.Uuid
+  targetSessionDate DateTime
+  content           String
+  contextSessions   String[]  @default([]) @db.Uuid
+  delivered         Boolean   @default(false)
+  deliveredAt       DateTime?
+  createdAt         DateTime  @default(now())
+
+  client Client @relation(fields: [clientId], references: [id])
+
+  @@index([clientId, targetSessionDate])
+  @@map("prep_briefs")
+}
+
+model CoachSettings {
+  id                    String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  coachName             String          @default("Todd Zimbelman")
+  coachEmail            String          @default("todd@growwithcocreate.com")
+  businessName          String          @default("Co-Create Coaching")
+  defaultHourlyRate     Decimal         @default(300) @db.Decimal(10, 2)
+  defaultBillingCadence BillingCadence  @default(MONTHLY)
+  billingDayOfWeek      Int             @default(1)
+  stripeAccountId       String?
+  googleCalendarId      String?
+  fathomWebhookSecret   String?
+  coachingTitleFilter   String?
+  briefDeliveryMinutes  Int             @default(30)
+  nlmLastSynced         DateTime?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@map("coach_settings")
+}
+
+// ─── JOB QUEUE ────────────────────────────────────────
+
+model Job {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type       JobType
+  payload    Json
+  status     JobStatus @default(PENDING)
+  error      String?
+  retryCount Int       @default(0)
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  completedAt DateTime?
+
+  @@index([status, createdAt])
+  @@index([type, status])
+  @@map("jobs")
+}
