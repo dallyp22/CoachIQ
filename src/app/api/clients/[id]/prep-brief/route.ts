@@ -110,7 +110,7 @@ ${synopsesContext}`,
         clientId: id,
         targetSessionDate: new Date(), // Manual trigger, no specific target
         content: briefContent,
-        contextSessions: client.sessions.map((s) => s.date.toISOString()),
+        contextSessions: [],
       },
     });
 
