@@ -2,86 +2,55 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { UserButton } from "@clerk/nextjs";
-import { ThemeToggle } from "./theme-toggle";
 
-const navItems = [
-  { href: "/", label: "Dashboard", icon: DashboardIcon },
+const tabs = [
+  { href: "/", label: "Home", icon: HomeIcon },
   { href: "/clients", label: "Clients", icon: ClientsIcon },
   { href: "/search", label: "Search", icon: SearchIcon },
   { href: "/invoices", label: "Invoices", icon: InvoicesIcon },
-  { href: "/analytics", label: "Analytics", icon: AnalyticsIcon },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
-export function Sidebar() {
+export function MobileNav() {
   const pathname = usePathname();
 
   return (
-    <aside className="hidden lg:flex lg:flex-col lg:w-[280px] bg-sidebar text-sidebar-text h-full">
-      {/* Logo */}
-      <div className="px-5 pt-5 pb-4 border-b border-sidebar-surface">
-        <h1 className="font-display text-xl text-sidebar-text">
+    <>
+      {/* Mobile top header */}
+      <div className="lg:hidden flex items-center justify-between px-4 py-3 bg-sidebar border-b border-sidebar-surface">
+        <span className="font-display text-base text-sidebar-text">
           Coach<span className="text-accent">IQ</span>
-        </h1>
+        </span>
       </div>
 
-      {/* Search */}
-      <div className="px-5 py-4">
-        <Link
-          href="/search"
-          className="flex items-center w-full px-3 py-2 bg-sidebar-surface border border-[#3F3B39] rounded text-sidebar-muted font-mono text-xs hover:border-accent transition-colors"
-        >
-          <SearchIcon className="w-3.5 h-3.5 mr-2 shrink-0" />
-          <span>Search transcripts...</span>
-        </Link>
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex-1 px-3 space-y-0.5">
-        {navItems.map((item) => {
+      {/* Bottom tab bar */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-sidebar border-t border-sidebar-surface flex z-50">
+        {tabs.map((tab) => {
           const isActive =
-            item.href === "/"
+            tab.href === "/"
               ? pathname === "/"
-              : pathname.startsWith(item.href);
+              : pathname.startsWith(tab.href);
           return (
             <Link
-              key={item.href}
-              href={item.href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded text-sm transition-colors ${
+              key={tab.href}
+              href={tab.href}
+              className={`flex-1 flex flex-col items-center gap-1 py-2.5 text-[10px] transition-colors ${
                 isActive
-                  ? "bg-sidebar-surface text-sidebar-text border-l-2 border-accent pl-[10px]"
-                  : "text-sidebar-muted hover:bg-sidebar-surface hover:text-sidebar-text"
+                  ? "text-accent"
+                  : "text-sidebar-muted"
               }`}
             >
-              <item.icon className="w-4 h-4 shrink-0" />
-              {item.label}
+              <tab.icon className="w-5 h-5" />
+              {tab.label}
             </Link>
           );
         })}
       </nav>
-
-      {/* Footer */}
-      <div className="px-5 py-4 border-t border-sidebar-surface flex items-center justify-between">
-        <p className="text-xs text-sidebar-muted">Co-Create Coaching</p>
-        <div className="flex items-center gap-2">
-          <ThemeToggle />
-          <UserButton
-          appearance={{
-            elements: {
-              avatarBox: "w-7 h-7",
-            },
-          }}
-          />
-        </div>
-      </div>
-    </aside>
+    </>
   );
 }
 
-// ─── Icons (inline SVG, no dependency) ────────────────
-
-function DashboardIcon({ className }: { className?: string }) {
+function HomeIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25a2.25 2.25 0 0 1-2.25-2.25v-2.25Z" />
@@ -109,14 +78,6 @@ function InvoicesIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z" />
-    </svg>
-  );
-}
-
-function AnalyticsIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
     </svg>
   );
 }
