@@ -32,6 +32,7 @@ export default async function ClientDossierPage({
         hourlyRate: Number(client.hourlyRate),
         billingCadence: client.billingCadence,
         meetingCadence: client.meetingCadence,
+        allowsFathom: client.allowsFathom,
         status: client.status,
         notes: client.notes,
         tags: client.tags,
@@ -46,6 +47,7 @@ export default async function ClientDossierPage({
           billableMinutes: s.billableMinutes,
           recordingUrl: s.recordingUrl,
           synopsis: s.synopsis,
+          sessionSource: s.sessionSource,
         })),
       }}
     />

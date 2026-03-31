@@ -12,6 +12,7 @@ interface Session {
   billableMinutes: number;
   recordingUrl: string | null;
   synopsis: string | null;
+  sessionSource: string;
 }
 
 interface ClientData {
@@ -23,6 +24,7 @@ interface ClientData {
   hourlyRate: number;
   billingCadence: string;
   meetingCadence: string;
+  allowsFathom: boolean;
   status: string;
   notes: string | null;
   tags: string[];
@@ -44,6 +46,7 @@ export function ClientDossier({ client }: { client: ClientData }) {
     hourlyRate: String(client.hourlyRate),
     billingCadence: client.billingCadence,
     meetingCadence: client.meetingCadence,
+    allowsFathom: client.allowsFathom,
     status: client.status,
     notes: client.notes || "",
   });
@@ -71,6 +74,7 @@ export function ClientDossier({ client }: { client: ClientData }) {
           hourlyRate: form.hourlyRate,
           billingCadence: form.billingCadence,
           meetingCadence: form.meetingCadence,
+          allowsFathom: form.allowsFathom,
           status: form.status,
           notes: form.notes || null,
         }),
@@ -91,6 +95,7 @@ export function ClientDossier({ client }: { client: ClientData }) {
       hourlyRate: String(client.hourlyRate),
       billingCadence: client.billingCadence,
       meetingCadence: client.meetingCadence,
+      allowsFathom: client.allowsFathom,
       status: client.status,
       notes: client.notes || "",
     });
@@ -205,6 +210,20 @@ export function ClientDossier({ client }: { client: ClientData }) {
                       <option value="PROSPECT">Prospect</option>
                     </select>
                   </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.allowsFathom}
+                      onChange={(e) => setForm({ ...form, allowsFathom: e.target.checked })}
+                      className="accent-accent w-4 h-4"
+                    />
+                    <span className="text-xs text-muted font-medium">Records with Fathom</span>
+                  </label>
+                  {!form.allowsFathom && (
+                    <span className="text-xs text-muted italic">Sessions tracked via Google Calendar</span>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs text-muted font-medium">Notes</label>
@@ -339,7 +358,7 @@ export function ClientDossier({ client }: { client: ClientData }) {
               No sessions recorded yet for {client.name.split(" ")[0]}
             </p>
             <p className="text-sm text-muted mt-2">
-              Sessions appear automatically when Fathom processes a coaching recording.
+              Sessions appear automatically from Fathom recordings or Google Calendar sync.
             </p>
           </div>
         ) : (
@@ -368,6 +387,15 @@ export function ClientDossier({ client }: { client: ClientData }) {
                     <span className="font-mono text-xs text-muted bg-surface border border-border px-2 py-0.5 rounded">
                       {session.durationMinutes} min
                     </span>
+                    {session.sessionSource !== "FATHOM" && (
+                      <span className={`font-mono text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${
+                        session.sessionSource === "CALENDAR"
+                          ? "bg-blue-50 text-blue-600 border border-blue-200"
+                          : "bg-stone-100 text-stone-500 border border-stone-200"
+                      }`}>
+                        {session.sessionSource === "CALENDAR" ? "Calendar" : "Manual"}
+                      </span>
+                    )}
                     {session.recordingUrl && (
                       <a
                         href={session.recordingUrl}

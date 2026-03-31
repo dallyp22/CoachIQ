@@ -21,6 +21,10 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [calendarTest, setCalendarTest] = useState<{
+    status: "idle" | "testing" | "connected" | "error";
+    message?: string;
+  }>({ status: "idle" });
 
   useEffect(() => {
     fetch("/api/settings")
@@ -136,14 +140,51 @@ export default function SettingsPage() {
         </Section>
 
         {/* Integrations */}
-        <Section title="Integrations">
+        <Section title="Integrations" description="Connect Google Calendar to power daily briefs, prep briefs, and session tracking for non-Fathom clients.">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Field
-              label="Google Calendar ID"
-              value={settings.googleCalendarId || ""}
-              onChange={(v) => update("googleCalendarId", v)}
-              placeholder="primary or calendar@group.calendar.google.com"
-            />
+            <div>
+              <Field
+                label="Google Calendar ID"
+                value={settings.googleCalendarId || ""}
+                onChange={(v) => update("googleCalendarId", v)}
+                placeholder="primary or todd@growwithcocreate.com"
+              />
+              <button
+                onClick={async () => {
+                  setCalendarTest({ status: "testing" });
+                  try {
+                    const res = await fetch("/api/calendar/test");
+                    const data = await res.json();
+                    if (data.status === "connected") {
+                      setCalendarTest({
+                        status: "connected",
+                        message: `Connected to "${data.calendar.summary}" (${data.upcomingEvents} upcoming events)`,
+                      });
+                    } else {
+                      setCalendarTest({
+                        status: "error",
+                        message: data.setup || data.error,
+                      });
+                    }
+                  } catch {
+                    setCalendarTest({
+                      status: "error",
+                      message: "Failed to reach the test endpoint.",
+                    });
+                  }
+                }}
+                disabled={calendarTest.status === "testing"}
+                className="mt-2 px-3 py-1.5 text-xs font-medium border border-border rounded hover:bg-border/30 transition-colors disabled:opacity-50"
+              >
+                {calendarTest.status === "testing" ? "Testing..." : "Test Connection"}
+              </button>
+              {calendarTest.status === "connected" && (
+                <p className="mt-1.5 text-xs text-success">{calendarTest.message}</p>
+              )}
+              {calendarTest.status === "error" && (
+                <p className="mt-1.5 text-xs text-error">{calendarTest.message}</p>
+              )}
+            </div>
             <Field
               label="Coaching Title Filter (regex)"
               value={settings.coachingTitleFilter || ""}
@@ -152,6 +193,9 @@ export default function SettingsPage() {
               mono
             />
           </div>
+          <p className="text-xs text-muted mt-3">
+            Share your calendar with <span className="font-mono text-foreground/70">coachiq-pipeline@coachiq-491616.iam.gserviceaccount.com</span> (read-only) to enable calendar features.
+          </p>
         </Section>
 
         {/* Billing Defaults */}

@@ -123,6 +123,7 @@ export async function POST(request: NextRequest) {
       data: {
         clientId: client.id,
         fathomRecordingId: recordingId,
+        sessionSource: "FATHOM",
         title,
         date: sessionDate,
         durationMinutes,

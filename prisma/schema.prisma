@@ -56,11 +56,18 @@ enum InvoiceStatus {
   VOID
 }
 
+enum SessionSource {
+  FATHOM
+  CALENDAR
+  MANUAL
+}
+
 enum JobType {
   GENERATE_EMBEDDING
   GENERATE_SYNOPSIS
   GENERATE_BRIEF
   INJECT_NLM
+  CALENDAR_SYNC
 }
 
 enum JobStatus {
@@ -86,6 +93,7 @@ model Client {
   stripeCustomerId String?
   notebookId       String?
   driveFolderId    String?
+  allowsFathom     Boolean         @default(true)
   status           ClientStatus    @default(ACTIVE)
   notes            String?
   tags             String[]        @default([])
@@ -107,7 +115,8 @@ model Client {
 model Session {
   id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   clientId          String        @db.Uuid
-  fathomRecordingId String        @unique
+  fathomRecordingId String?       @unique
+  sessionSource     SessionSource @default(FATHOM)
   title             String
   date              DateTime
   durationMinutes   Int
@@ -119,7 +128,7 @@ model Session {
   synopsis          String?
   transcriptDriveId String?
   nlmInjected       Boolean       @default(false)
-  calendarEventId   String?
+  calendarEventId   String?       @unique
   status            SessionStatus @default(CAPTURED)
   createdAt         DateTime      @default(now())
 
@@ -233,6 +242,7 @@ model CoachSettings {
   fathomWebhookSecret   String?
   coachingTitleFilter   String?
   briefDeliveryMinutes  Int             @default(30)
+  calendarSyncEnabled   Boolean         @default(false)
   nlmLastSynced         DateTime?
   openaiApiKey          String?
   anthropicApiKey       String?

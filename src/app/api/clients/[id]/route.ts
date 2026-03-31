@@ -19,7 +19,7 @@ export async function PATCH(
 
   const allowedFields = [
     "name", "email", "phone", "company", "hourlyRate",
-    "billingCadence", "meetingCadence", "status", "notes", "tags",
+    "billingCadence", "meetingCadence", "status", "notes", "tags", "allowsFathom",
   ];
 
   const updates: Record<string, unknown> = {};
@@ -27,6 +27,8 @@ export async function PATCH(
     if (body[field] !== undefined) {
       if (field === "hourlyRate") {
         updates[field] = parseFloat(body[field]);
+      } else if (field === "allowsFathom") {
+        updates[field] = Boolean(body[field]);
       } else {
         updates[field] = body[field];
       }
