@@ -260,6 +260,7 @@ export function ClientDossier({ client }: { client: ClientData }) {
                     Drive
                   </a>
                 )}
+                <NlmSyncButton clientId={client.id} clientName={client.name} notebookId={client.notebookId} />
               </>
             )}
           </div>
@@ -507,6 +508,159 @@ function BillingRow({ label, value }: { label: string; value: string }) {
       <span className="text-sm text-muted">{label}</span>
       <span className="font-mono text-sm font-medium text-foreground">{value}</span>
     </div>
+  );
+}
+
+function NlmSyncButton({ clientId, clientName, notebookId }: { clientId: string; clientName: string; notebookId: string | null }) {
+  const [extensionReady, setExtensionReady] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  // Detect extension
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      if (event.data?.type === "COACHIQ_NLM_EXTENSION_READY") {
+        setExtensionReady(true);
+      }
+      if (event.data?.type === "COACHIQ_NLM_SYNC_RESULT") {
+        handleSyncResult(event.data.payload);
+      }
+    }
+    window.addEventListener("message", onMessage);
+
+    // Extension may have already fired ready before this listener — ping it
+    const timeout = setTimeout(() => setLoaded(true), 2000);
+
+    return () => {
+      window.removeEventListener("message", onMessage);
+      clearTimeout(timeout);
+    };
+  }, []);
+
+  // Mark loaded once extension detected
+  useEffect(() => {
+    if (extensionReady) setLoaded(true);
+  }, [extensionReady]);
+
+  // Fetch pending count
+  useEffect(() => {
+    fetch(`/api/nlm-sync/pending?clientId=${clientId}`)
+      .then((r) => r.json())
+      .then((data) => setPendingCount(data.totalPending || 0))
+      .catch(() => {});
+  }, [clientId]);
+
+  async function handleSync() {
+    setSyncing(true);
+    setSyncStatus("Fetching pending sessions...");
+    try {
+      const resp = await fetch(`/api/nlm-sync/pending?clientId=${clientId}`);
+      const data = await resp.json();
+
+      if (data.totalPending === 0) {
+        setSyncStatus("All sessions already synced");
+        setTimeout(() => setSyncStatus(null), 3000);
+        setSyncing(false);
+        return;
+      }
+
+      setSyncStatus(`Syncing ${data.totalPending} session${data.totalPending > 1 ? "s" : ""}...`);
+
+      // Send to extension via postMessage
+      window.postMessage({
+        type: "COACHIQ_NLM_SYNC",
+        payload: { clients: data.clients },
+      }, "*");
+    } catch {
+      setSyncStatus("Failed to fetch pending sessions");
+      setSyncing(false);
+    }
+  }
+
+  async function handleSyncResult(payload: { success: boolean; results?: Array<{ sessionId: string; clientId: string; success: boolean; notebookId?: string; error?: string }>; summary?: { succeeded: number; failed: number }; error?: string }) {
+    if (!payload.success) {
+      setSyncStatus(payload.error || "Sync failed");
+      setSyncing(false);
+      return;
+    }
+
+    // Report results to the API
+    try {
+      await fetch("/api/nlm-sync/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ results: payload.results }),
+      });
+    } catch {
+      // Non-fatal — sessions were still injected into NLM
+    }
+
+    const { succeeded, failed } = payload.summary || { succeeded: 0, failed: 0 };
+    setSyncStatus(
+      failed > 0
+        ? `Synced ${succeeded}, ${failed} failed`
+        : `Synced ${succeeded} session${succeeded > 1 ? "s" : ""}`
+    );
+    setPendingCount((prev) => Math.max(0, prev - (succeeded || 0)));
+    setSyncing(false);
+    setTimeout(() => setSyncStatus(null), 5000);
+  }
+
+  if (!loaded) return null;
+
+  if (!extensionReady) {
+    return (
+      <span
+        className="flex items-center gap-2 px-4 py-2 bg-surface border border-border text-muted text-sm font-medium rounded cursor-default"
+        title="Install the CoachIQ NLM Sync extension to enable syncing"
+      >
+        <SyncIcon className="w-4 h-4" />
+        NLM Extension required
+      </span>
+    );
+  }
+
+  if (pendingCount === 0 && !syncing && !syncStatus) {
+    return (
+      <span className="flex items-center gap-2 px-4 py-2 bg-surface border border-green-600/30 text-green-600 text-sm font-medium rounded cursor-default">
+        <CheckIcon className="w-4 h-4" />
+        NLM synced
+      </span>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={handleSync}
+        disabled={syncing}
+        className="flex items-center gap-2 px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded hover:bg-amber-700 transition-colors disabled:opacity-50"
+      >
+        <SyncIcon className={`w-4 h-4 ${syncing ? "animate-spin" : ""}`} />
+        {syncing ? "Syncing..." : `Sync ${pendingCount} to NLM`}
+      </button>
+      {syncStatus && (
+        <span className="text-xs text-muted">{syncStatus}</span>
+      )}
+    </div>
+  );
+}
+
+function SyncIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+    </svg>
   );
 }
 
