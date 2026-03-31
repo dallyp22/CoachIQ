@@ -58,14 +58,15 @@ export default function SearchPage() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search across all coaching sessions..."
+            placeholder="Search by client name, company, or session content..."
             className="w-full px-5 py-3.5 font-mono text-sm border-2 border-border rounded-[var(--radius-md)] bg-background text-foreground outline-none transition-colors focus:border-accent placeholder:text-muted"
           />
         </form>
 
-        {method === "fulltext" && searched && (
+        {searched && !loading && results.length > 0 && (
           <p className="text-xs text-muted mt-3">
-            Using keyword search (semantic search requires transcript embeddings)
+            {results.length} result{results.length !== 1 ? "s" : ""} via{" "}
+            {method === "semantic" ? "semantic search" : method === "fulltext" ? "keyword search" : method === "client" ? "client match" : "search"}
           </p>
         )}
         {method === "error" && (
