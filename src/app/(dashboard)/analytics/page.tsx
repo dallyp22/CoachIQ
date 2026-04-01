@@ -13,6 +13,7 @@ import {
   Line,
 } from "recharts";
 import { WordCloudSection } from "@/components/word-cloud";
+import { PracticeInsights } from "@/components/practice-insights";
 
 interface AnalyticsData {
   monthlyData: Array<{
@@ -195,6 +196,11 @@ export default function AnalyticsPage() {
             <Bar dataKey="sessions" fill="var(--accent)" radius={[0, 4, 4, 0]} />
           </BarChart>
         </ResponsiveContainer>
+      </div>
+
+      {/* Coaching Patterns */}
+      <div className="mt-8">
+        <PracticeInsights />
       </div>
 
       {/* Word Cloud */}

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { ClientInsights } from "@/components/client-insights";
 
 interface Session {
   id: string;
@@ -345,6 +346,9 @@ export function ClientDossier({ client }: { client: ClientData }) {
 
       {/* Prep Brief */}
       <PrepBriefSection clientId={client.id} clientName={client.name} hasSessions={client.sessions.length > 0} />
+
+      {/* Coaching Insights */}
+      <ClientInsights clientId={client.id} clientName={client.name} />
 
       {/* Session Timeline */}
       <div className="mt-8">
