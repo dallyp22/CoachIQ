@@ -25,7 +25,7 @@ interface PracticeData {
   lowOwnership: ClientInsight[];
 }
 
-export function PracticeInsights() {
+export function PracticeInsights({ privacy = false }: { privacy?: boolean }) {
   const [data, setData] = useState<PracticeData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -91,6 +91,7 @@ export function PracticeInsights() {
           description="Clients driving the conversation"
           clients={data.topTalkers}
           metric={(c) => `${c.avgClientTalk}%`}
+          privacy={privacy}
           good
         />
         <LeaderBoard
@@ -98,6 +99,7 @@ export function PracticeInsights() {
           description="Clients asking the most questions"
           clients={data.topQuestioners}
           metric={(c) => `${c.avgQuestionRatio}%`}
+          privacy={privacy}
           good
         />
         <LeaderBoard
@@ -105,6 +107,7 @@ export function PracticeInsights() {
           description="Highest I/we vs they/them ratio"
           clients={data.topOwnership}
           metric={(c) => `${c.avgOwnership}%`}
+          privacy={privacy}
           good
         />
         <LeaderBoard
@@ -112,6 +115,7 @@ export function PracticeInsights() {
           description="May need support taking accountability"
           clients={data.lowOwnership}
           metric={(c) => `${c.avgOwnership}%`}
+          privacy={privacy}
         />
       </div>
     </div>
@@ -167,12 +171,14 @@ function LeaderBoard({
   clients,
   metric,
   good,
+  privacy,
 }: {
   title: string;
   description: string;
   clients: ClientInsight[];
   metric: (c: ClientInsight) => string;
   good?: boolean;
+  privacy?: boolean;
 }) {
   return (
     <div className="border border-border rounded-[var(--radius-md)] p-4">
@@ -182,12 +188,18 @@ function LeaderBoard({
         {clients.map((c, i) => (
           <div key={c.clientId} className="flex items-center gap-2">
             <span className="font-mono text-[10px] text-muted w-4">{i + 1}.</span>
-            <Link
-              href={`/clients/${c.clientId}`}
-              className="text-xs text-foreground hover:text-accent transition-colors flex-1 truncate"
-            >
-              {c.clientName}
-            </Link>
+            {privacy ? (
+              <span className="text-xs text-foreground flex-1 truncate">
+                Client {i + 1}
+              </span>
+            ) : (
+              <Link
+                href={`/clients/${c.clientId}`}
+                className="text-xs text-foreground hover:text-accent transition-colors flex-1 truncate"
+              >
+                {c.clientName}
+              </Link>
+            )}
             <span className={`font-mono text-xs font-medium ${good ? "text-success" : "text-warning"}`}>
               {metric(c)}
             </span>
