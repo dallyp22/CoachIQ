@@ -1,9 +1,21 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 
-interface Segment {
-  speaker?: { display_name?: string };
-  text?: string;
+interface ParsedTurn {
+  speaker: string;
+  text: string;
+}
+
+function parseTranscriptTurns(fullText: string): ParsedTurn[] {
+  const turns: ParsedTurn[] = [];
+  const regex = /^\[[\d:]+\]\s+(.+?):\s+(.+)$/gm;
+  let match;
+  while ((match = regex.exec(fullText)) !== null) {
+    const speaker = match[1].trim();
+    const text = match[2].trim();
+    if (speaker && text && text.length > 2) turns.push({ speaker, text });
+  }
+  return turns;
 }
 
 /**
@@ -43,7 +55,7 @@ export async function GET() {
         where: { clientId: client.id },
         orderBy: { createdAt: "desc" },
         take: 10,
-        select: { rawSegments: true },
+        select: { fullText: true },
       });
 
       let clientTalkSum = 0;
@@ -52,22 +64,20 @@ export async function GET() {
       let validSessions = 0;
 
       for (const t of transcripts) {
-        const segments = t.rawSegments as Segment[] | null;
-        if (!segments || !Array.isArray(segments) || segments.length === 0) continue;
+        const turns = parseTranscriptTurns(t.fullText);
+        if (turns.length < 5) continue;
 
         let clientWords = 0;
         let coachWords = 0;
         const clientTexts: string[] = [];
 
-        for (const seg of segments) {
-          const text = seg.text?.trim() || "";
-          if (!text) continue;
-          const speaker = seg.speaker?.display_name?.toLowerCase() || "";
+        for (const turn of turns) {
+          const speaker = turn.speaker.toLowerCase();
           const isCoach = speaker.includes(coachFirstName) || speaker.includes("todd") || speaker === "unknown";
-          const wc = text.split(/\s+/).length;
+          const wc = turn.text.split(/\s+/).length;
 
           if (isCoach) coachWords += wc;
-          else { clientWords += wc; clientTexts.push(text); }
+          else { clientWords += wc; clientTexts.push(turn.text); }
         }
 
         const total = clientWords + coachWords;

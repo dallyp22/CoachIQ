@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 
-interface Segment {
-  speaker?: { display_name?: string };
-  timestamp?: string;
-  text?: string;
+interface ParsedTurn {
+  speaker: string;
+  text: string;
 }
 
 interface SessionMetrics {
@@ -63,7 +62,7 @@ export async function GET(request: NextRequest) {
         title: true,
         transcript: {
           select: {
-            rawSegments: true,
+            fullText: true,
           },
         },
       },
@@ -75,11 +74,12 @@ export async function GET(request: NextRequest) {
     const metrics: SessionMetrics[] = [];
 
     for (const session of sessions) {
-      const segments = session.transcript?.rawSegments as Segment[] | null;
+      const fullText = session.transcript?.fullText;
+      if (!fullText) continue;
 
-      if (!segments || !Array.isArray(segments) || segments.length === 0) {
-        continue;
-      }
+      // Parse speaker turns from fullText: [00:01:43] Speaker Name: text...
+      const turns = parseTranscriptTurns(fullText);
+      if (turns.length < 5) continue; // Skip sessions with too few parseable turns
 
       // Identify coach vs client turns
       let clientWords = 0;
@@ -88,17 +88,14 @@ export async function GET(request: NextRequest) {
       let coachTurns = 0;
       const clientTexts: string[] = [];
 
-      for (const seg of segments) {
-        const text = seg.text?.trim() || "";
-        if (!text) continue;
-
-        const speaker = seg.speaker?.display_name?.toLowerCase() || "";
+      for (const turn of turns) {
+        const speaker = turn.speaker.toLowerCase();
         const isCoach =
           speaker.includes(coachFirstName) ||
           speaker.includes("todd") ||
           speaker === "unknown";
 
-        const wordCount = text.split(/\s+/).length;
+        const wordCount = turn.text.split(/\s+/).length;
 
         if (isCoach) {
           coachWords += wordCount;
@@ -106,7 +103,7 @@ export async function GET(request: NextRequest) {
         } else {
           clientWords += wordCount;
           clientTurns++;
-          clientTexts.push(text);
+          clientTexts.push(turn.text);
         }
       }
 
@@ -173,6 +170,26 @@ export async function GET(request: NextRequest) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────
+
+/**
+ * Parse speaker turns from formatted fullText.
+ * Lines look like: [00:01:43] Todd Zimbelman: some text here...
+ */
+function parseTranscriptTurns(fullText: string): ParsedTurn[] {
+  const turns: ParsedTurn[] = [];
+  const regex = /^\[[\d:]+\]\s+(.+?):\s+(.+)$/gm;
+  let match;
+
+  while ((match = regex.exec(fullText)) !== null) {
+    const speaker = match[1].trim();
+    const text = match[2].trim();
+    if (speaker && text && text.length > 2) {
+      turns.push({ speaker, text });
+    }
+  }
+
+  return turns;
+}
 
 function computeQuestionRatio(text: string): number {
   if (!text) return 0;
