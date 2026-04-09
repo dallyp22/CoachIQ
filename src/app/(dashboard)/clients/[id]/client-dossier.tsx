@@ -630,9 +630,19 @@ function NlmSyncButton({ clientId, clientName, notebookId }: { clientId: string;
     }
 
     const { succeeded, failed } = payload.summary || { succeeded: 0, failed: 0 };
+
+    // Log individual errors for debugging
+    if (payload.results) {
+      const failures = payload.results.filter((r) => !r.success && r.error);
+      if (failures.length > 0) {
+        console.error("[CoachIQ NLM Sync] Failed sessions:", failures);
+      }
+    }
+
+    const firstError = payload.results?.find((r) => !r.success && r.error)?.error;
     setSyncStatus(
       failed > 0
-        ? `Synced ${succeeded}, ${failed} failed`
+        ? `Synced ${succeeded}, ${failed} failed${firstError ? ` — ${firstError}` : ""}`
         : `Synced ${succeeded} session${succeeded > 1 ? "s" : ""}`
     );
     setPendingCount((prev) => Math.max(0, prev - (succeeded || 0)));

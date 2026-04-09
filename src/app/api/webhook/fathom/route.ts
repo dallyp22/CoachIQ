@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { generateSynopsis, getOpenAIKey } from "@/lib/ai";
 import crypto from "crypto";
 
 const WEBHOOK_SECRET = process.env.COACHIQ_FATHOM_WEBHOOK_SECRET || "";
@@ -175,25 +176,76 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // 7. Queue background jobs
-    if (transcriptData.length > 0) {
-      await tx.job.create({
-        data: {
-          type: "GENERATE_EMBEDDING",
-          payload: { sessionId: sess.id, clientId: client.id },
-        },
-      });
-
-      await tx.job.create({
-        data: {
-          type: "GENERATE_SYNOPSIS",
-          payload: { sessionId: sess.id, clientId: client.id },
-        },
-      });
-    }
-
     return sess;
   });
+
+  // 7. Generate embedding + synopsis inline (non-blocking — respond first, then process)
+  // Use waitUntil-style: fire and don't block the webhook response
+  const aiWork = (async () => {
+    if (transcriptData.length === 0) return;
+
+    try {
+      // Generate embedding
+      const apiKey = await getOpenAIKey();
+      const truncated = fullText.length > 20000 ? fullText.slice(0, 20000) : fullText;
+      const embResp = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "text-embedding-3-small",
+          input: truncated,
+        }),
+      });
+
+      if (embResp.ok) {
+        const embData = await embResp.json();
+        const vectorStr = `[${embData.data[0].embedding.join(",")}]`;
+        const transcript = await prisma.transcript.findFirst({
+          where: { sessionId: session.id },
+          select: { id: true },
+        });
+        if (transcript) {
+          await prisma.$queryRawUnsafe(
+            `UPDATE transcripts SET embedding = $1::vector, "embeddingModel" = $2 WHERE id = $3::uuid`,
+            vectorStr,
+            "text-embedding-3-small",
+            transcript.id
+          );
+        }
+      }
+    } catch (e) {
+      console.error("Embedding generation failed:", e);
+    }
+
+    try {
+      // Get prior synopses for context
+      const priorSessions = await prisma.session.findMany({
+        where: {
+          clientId: client.id,
+          date: { lt: sessionDate },
+          synopsis: { not: null },
+        },
+        orderBy: { date: "desc" },
+        take: 3,
+        select: { synopsis: true },
+      });
+      const priorSynopses = priorSessions.map((s) => s.synopsis!).reverse();
+
+      const synopsis = await generateSynopsis(fullText, client.name, priorSynopses);
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { synopsis },
+      });
+    } catch (e) {
+      console.error("Synopsis generation failed:", e);
+    }
+  })();
+
+  // Wait for AI work to complete before responding (adds ~3-5s but ensures data is ready)
+  await aiWork;
 
   return NextResponse.json({
     status: "processed",
