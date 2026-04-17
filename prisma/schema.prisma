@@ -22,6 +22,7 @@ enum BillingCadence {
   WEEKLY
   BIWEEKLY
   MONTHLY
+  CUSTOM_DAYS
 }
 
 enum MeetingCadence {
@@ -34,7 +35,6 @@ enum MeetingCadence {
 enum SessionStatus {
   CAPTURED
   REVIEWED
-  BILLED
   ARCHIVED
 }
 
@@ -80,26 +80,35 @@ enum JobStatus {
 // ─── MODELS ───────────────────────────────────────────
 
 model Client {
-  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name             String
-  email            String          @unique
-  secondaryEmails  String[]        @default([])
-  phone            String?
-  company          String?
-  address          Json?
-  hourlyRate       Decimal         @default(300) @db.Decimal(10, 2)
-  billingCadence   BillingCadence  @default(MONTHLY)
-  meetingCadence   MeetingCadence  @default(BIWEEKLY)
-  stripeCustomerId String?
-  notebookId       String?
-  driveFolderId    String?
-  allowsFathom     Boolean         @default(true)
-  status           ClientStatus    @default(ACTIVE)
-  notes            String?
-  tags             String[]        @default([])
-  sessionCount     Int             @default(0)
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String
+  displayName         String?
+  email               String         @unique
+  secondaryEmails     String[]       @default([])
+  phone               String?
+  company             String?
+  address             Json?
+  hourlyRate          Decimal        @default(300) @db.Decimal(10, 2)
+  billingCadence      BillingCadence @default(MONTHLY)
+  customCadenceDays   Int?
+  billingContactName  String?
+  billingContactEmail String?
+  billingPausedUntil  DateTime?
+  billingNotes        String?
+  nextInvoiceDueAt    DateTime?
+  billingTimezone     String?
+  retainer            Decimal        @default(0) @db.Decimal(10, 2)
+  meetingCadence      MeetingCadence @default(BIWEEKLY)
+  stripeCustomerId    String?
+  notebookId          String?
+  driveFolderId       String?
+  allowsFathom        Boolean        @default(true)
+  status              ClientStatus   @default(ACTIVE)
+  notes               String?
+  tags                String[]       @default([])
+  sessionCount        Int            @default(0)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   sessions    Session[]
   transcripts Transcript[]
@@ -109,6 +118,7 @@ model Client {
 
   @@index([status])
   @@index([email])
+  @@index([nextInvoiceDueAt])
   @@map("clients")
 }
 
@@ -187,29 +197,67 @@ model TimeEntry {
 }
 
 model Invoice {
-  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  clientId         String        @db.Uuid
-  invoiceNumber    String        @unique
-  periodStart      DateTime
-  periodEnd        DateTime
-  lineItems        Json
-  subtotal         Decimal       @db.Decimal(10, 2)
-  tax              Decimal       @default(0) @db.Decimal(10, 2)
-  total            Decimal       @db.Decimal(10, 2)
-  status           InvoiceStatus @default(DRAFT)
-  stripeInvoiceId  String?
-  stripePaymentUrl String?
-  sentAt           DateTime?
-  paidAt           DateTime?
-  notes            String?
-  createdAt        DateTime      @default(now())
+  id                      String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId                String        @db.Uuid
+  invoiceNumber           String        @unique
+  periodStart             DateTime
+  periodEnd               DateTime
+  lineItems               Json
+  subtotal                Decimal       @db.Decimal(10, 2)
+  tax                     Decimal       @default(0) @db.Decimal(10, 2)
+  total                   Decimal       @db.Decimal(10, 2)
+  status                  InvoiceStatus @default(DRAFT)
+  stripeInvoiceId         String?
+  stripePaymentUrl        String?
+  sentAt                  DateTime?
+  paidAt                  DateTime?
+  notes                   String?
+  // Snapshot fields: populated at DRAFT creation, frozen until "Refresh from client" is clicked.
+  // Existing rows backfilled from current client values in the same migration.
+  snapshotClientName      String?
+  snapshotBillingEmail    String?
+  snapshotBillingCcEmails String[]      @default([])
+  snapshotHourlyRate      Decimal?      @db.Decimal(10, 2)
+  parentInvoiceId         String?       @db.Uuid
+  lastReminderSentAt      DateTime?
+  createdAt               DateTime      @default(now())
 
-  client     Client      @relation(fields: [clientId], references: [id])
+  client      Client              @relation(fields: [clientId], references: [id])
   timeEntries TimeEntry[]
+  adjustments InvoiceAdjustment[]
 
   @@index([clientId])
   @@index([status])
   @@map("invoices")
+}
+
+model InvoiceAdjustment {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  invoiceId   String   @db.Uuid
+  kind        String // "credit" | "discount" | "expense"
+  amount      Decimal  @db.Decimal(10, 2) // signed: negative = credit/discount
+  description String
+  createdAt   DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_adjustments")
+}
+
+model BillingAuditLog {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  event     String // INVOICE_DRAFT | INVOICE_APPROVED | INVOICE_SENT | INVOICE_PAID | INVOICE_VOID | RESET | RETAINER_ADD | RETAINER_APPLY | MANUAL_EDIT | CRON_GEN | MANUAL_GEN | CADENCE_CHANGE
+  actor     String? // Clerk user id (null = system/cron)
+  clientId  String?  @db.Uuid
+  invoiceId String?  @db.Uuid
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([clientId, createdAt(sort: Desc)])
+  @@index([invoiceId])
+  @@index([event, createdAt(sort: Desc)])
+  @@map("billing_audit_logs")
 }
 
 model PrepBrief {
@@ -229,25 +277,29 @@ model PrepBrief {
 }
 
 model CoachSettings {
-  id                    String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  coachName             String          @default("Todd Zimbelman")
-  coachEmail            String          @default("todd@growwithcocreate.com")
-  businessName          String          @default("Co-Create Coaching")
-  defaultHourlyRate     Decimal         @default(300) @db.Decimal(10, 2)
-  defaultBillingCadence BillingCadence  @default(MONTHLY)
-  billingDayOfWeek      Int             @default(1)
-  stripeAccountId       String?
-  stripeSecretKey       String?
-  googleCalendarId      String?
-  fathomWebhookSecret   String?
-  coachingTitleFilter   String?
-  briefDeliveryMinutes  Int             @default(30)
-  calendarSyncEnabled   Boolean         @default(false)
-  nlmLastSynced         DateTime?
-  openaiApiKey          String?
-  anthropicApiKey       String?
-  createdAt             DateTime        @default(now())
-  updatedAt             DateTime        @updatedAt
+  id                       String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  coachName                String         @default("Todd Zimbelman")
+  coachEmail               String         @default("todd@growwithcocreate.com")
+  businessName             String         @default("Co-Create Coaching")
+  defaultHourlyRate        Decimal        @default(300) @db.Decimal(10, 2)
+  defaultBillingCadence    BillingCadence @default(MONTHLY)
+  defaultBillingDayOfMonth Int?
+  autoApproveUnderCents    Int?
+  invoicePrefix            String         @default("CIQ")
+  invoiceNumberPadding     Int            @default(4)
+  timezone                 String         @default("America/Chicago")
+  stripeAccountId          String?
+  stripeSecretKey          String?
+  googleCalendarId         String?
+  fathomWebhookSecret      String?
+  coachingTitleFilter      String?
+  briefDeliveryMinutes     Int            @default(30)
+  calendarSyncEnabled      Boolean        @default(false)
+  nlmLastSynced            DateTime?
+  openaiApiKey             String?
+  anthropicApiKey          String?
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
 
   @@map("coach_settings")
 }
@@ -255,14 +307,14 @@ model CoachSettings {
 // ─── JOB QUEUE ────────────────────────────────────────
 
 model Job {
-  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  type       JobType
-  payload    Json
-  status     JobStatus @default(PENDING)
-  error      String?
-  retryCount Int       @default(0)
-  createdAt  DateTime  @default(now())
-  startedAt  DateTime?
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type        JobType
+  payload     Json
+  status      JobStatus @default(PENDING)
+  error       String?
+  retryCount  Int       @default(0)
+  createdAt   DateTime  @default(now())
+  startedAt   DateTime?
   completedAt DateTime?
 
   @@index([status, createdAt])

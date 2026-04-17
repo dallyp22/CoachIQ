@@ -12,6 +12,10 @@
     {
       "path": "/api/cron/start-of-day",
       "schedule": "0 13 * * 1-5"
+    },
+    {
+      "path": "/api/cron/invoice-generation",
+      "schedule": "0 13 * * *"
     }
   ]
 }

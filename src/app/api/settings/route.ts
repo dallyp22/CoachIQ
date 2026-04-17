@@ -62,6 +62,63 @@ export async function PATCH(request: NextRequest) {
     updates.briefDeliveryMinutes = parseInt(body.briefDeliveryMinutes);
   }
 
+  // New billing-overhaul fields
+  if (body.defaultBillingDayOfMonth !== undefined) {
+    if (body.defaultBillingDayOfMonth === null || body.defaultBillingDayOfMonth === "") {
+      updates.defaultBillingDayOfMonth = null;
+    } else {
+      const n = Number(body.defaultBillingDayOfMonth);
+      if (!Number.isInteger(n) || n < 1 || n > 28) {
+        return NextResponse.json(
+          { error: "defaultBillingDayOfMonth must be an integer between 1 and 28" },
+          { status: 400 },
+        );
+      }
+      updates.defaultBillingDayOfMonth = n;
+    }
+  }
+  if (body.autoApproveUnderCents !== undefined) {
+    if (body.autoApproveUnderCents === null || body.autoApproveUnderCents === "") {
+      updates.autoApproveUnderCents = null;
+    } else {
+      const n = Number(body.autoApproveUnderCents);
+      if (!Number.isInteger(n) || n < 0) {
+        return NextResponse.json(
+          { error: "autoApproveUnderCents must be a non-negative integer" },
+          { status: 400 },
+        );
+      }
+      updates.autoApproveUnderCents = n;
+    }
+  }
+  if (body.invoicePrefix !== undefined) {
+    const v = String(body.invoicePrefix).trim();
+    if (v.length === 0 || v.length > 8) {
+      return NextResponse.json(
+        { error: "invoicePrefix must be 1-8 characters" },
+        { status: 400 },
+      );
+    }
+    updates.invoicePrefix = v;
+  }
+  if (body.invoiceNumberPadding !== undefined) {
+    const n = Number(body.invoiceNumberPadding);
+    if (!Number.isInteger(n) || n < 1 || n > 10) {
+      return NextResponse.json(
+        { error: "invoiceNumberPadding must be an integer between 1 and 10" },
+        { status: 400 },
+      );
+    }
+    updates.invoiceNumberPadding = n;
+  }
+  if (body.timezone !== undefined) {
+    const v = String(body.timezone).trim();
+    if (v.length === 0) {
+      return NextResponse.json({ error: "timezone is required" }, { status: 400 });
+    }
+    updates.timezone = v;
+  }
+
   const updated = await prisma.coachSettings.update({
     where: { id: settings.id },
     data: updates,

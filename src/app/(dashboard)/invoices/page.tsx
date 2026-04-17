@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
-import Link from "next/link";
 import { GenerateInvoicesButton, InvoiceCard } from "./actions";
+import { detectDrift } from "@/lib/billing/snapshot";
 
 export const dynamic = "force-dynamic";
 
@@ -16,10 +16,10 @@ export default async function InvoicesPage() {
   );
   const unbilledClients = new Set(unbilledEntries.map((e) => e.clientId)).size;
 
-  // Get draft invoices
+  // Get draft invoices with full client data so we can detect snapshot drift
   const draftInvoices = await prisma.invoice.findMany({
     where: { status: "DRAFT" },
-    include: { client: { select: { name: true, id: true } } },
+    include: { client: true },
     orderBy: { createdAt: "desc" },
   });
 
@@ -68,28 +68,39 @@ export default async function InvoicesPage() {
             Awaiting Review
           </h2>
           <div className="space-y-3">
-            {draftInvoices.map((invoice) => (
-              <InvoiceCard
-                key={invoice.id}
-                invoice={{
-                  id: invoice.id,
-                  invoiceNumber: invoice.invoiceNumber,
-                  periodStart: invoice.periodStart.toISOString(),
-                  periodEnd: invoice.periodEnd.toISOString(),
-                  lineItems: invoice.lineItems as Array<{
-                    date: string;
-                    description: string;
-                    hours: number;
-                    rate: number;
-                    amount: number;
-                  }>,
-                  total: Number(invoice.total),
-                  notes: invoice.notes,
-                }}
-                clientName={invoice.client.name}
-                clientId={invoice.client.id}
-              />
-            ))}
+            {draftInvoices.map((invoice) => {
+              const driftedFields = detectDrift(invoice, invoice.client);
+              return (
+                <InvoiceCard
+                  key={invoice.id}
+                  invoice={{
+                    id: invoice.id,
+                    invoiceNumber: invoice.invoiceNumber,
+                    periodStart: invoice.periodStart.toISOString(),
+                    periodEnd: invoice.periodEnd.toISOString(),
+                    lineItems: invoice.lineItems as Array<{
+                      date: string;
+                      description: string;
+                      hours: number;
+                      rate: number;
+                      amount: number;
+                    }>,
+                    total: Number(invoice.total),
+                    notes: invoice.notes,
+                    createdAt: invoice.createdAt.toISOString(),
+                    status: invoice.status,
+                  }}
+                  clientName={invoice.snapshotClientName ?? invoice.client.name}
+                  clientId={invoice.client.id}
+                  snapshot={{
+                    snapshotClientName: invoice.snapshotClientName,
+                    snapshotBillingEmail: invoice.snapshotBillingEmail,
+                    snapshotBillingCcEmails: invoice.snapshotBillingCcEmails,
+                    driftedFields,
+                  }}
+                />
+              );
+            })}
           </div>
         </div>
       )}

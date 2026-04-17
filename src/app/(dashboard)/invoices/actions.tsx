@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { SnapshotBanner } from "@/components/snapshot-banner";
 
 export function GenerateInvoicesButton() {
   const router = useRouter();
@@ -44,6 +45,7 @@ export function InvoiceCard({
   invoice,
   clientName,
   clientId,
+  snapshot,
 }: {
   invoice: {
     id: string;
@@ -53,9 +55,17 @@ export function InvoiceCard({
     lineItems: LineItem[];
     total: number;
     notes: string | null;
+    createdAt?: string;
+    status?: string;
   };
   clientName: string;
   clientId: string;
+  snapshot?: {
+    snapshotClientName: string | null;
+    snapshotBillingEmail: string | null;
+    snapshotBillingCcEmails: string[];
+    driftedFields: string[];
+  };
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -68,6 +78,44 @@ export function InvoiceCard({
   const [sent, setSent] = useState(false);
 
   const total = items.reduce((sum, item) => sum + item.amount, 0);
+  const [showAdjust, setShowAdjust] = useState(false);
+  const [adjustKind, setAdjustKind] = useState<"credit" | "discount" | "expense">("credit");
+  const [adjustAmount, setAdjustAmount] = useState("");
+  const [adjustDescription, setAdjustDescription] = useState("");
+  const [adjustError, setAdjustError] = useState<string | null>(null);
+  const [adjusting, setAdjusting] = useState(false);
+
+  async function handleAdjust() {
+    setAdjusting(true);
+    setAdjustError(null);
+    try {
+      const rawAmount = parseFloat(adjustAmount);
+      if (!rawAmount || isNaN(rawAmount)) throw new Error("Enter a valid amount");
+      const signed =
+        adjustKind === "expense" ? Math.abs(rawAmount) : -Math.abs(rawAmount);
+      const resp = await fetch(`/api/invoices/${invoice.id}/adjust`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: adjustKind,
+          amount: signed,
+          description: adjustDescription,
+        }),
+      });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(data.error || "Adjustment failed");
+      }
+      setShowAdjust(false);
+      setAdjustAmount("");
+      setAdjustDescription("");
+      router.refresh();
+    } catch (err) {
+      setAdjustError(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setAdjusting(false);
+    }
+  }
 
   function updateItem(index: number, field: keyof LineItem, value: string) {
     const updated = [...items];
@@ -148,6 +196,13 @@ export function InvoiceCard({
 
   return (
     <div className="bg-surface border border-border rounded-[var(--radius-lg)] p-5">
+      {snapshot && snapshot.driftedFields.length > 0 && (
+        <SnapshotBanner
+          invoiceId={invoice.id}
+          driftedFields={snapshot.driftedFields}
+          snapshotDate={invoice.createdAt ?? new Date()}
+        />
+      )}
       <div className="flex items-start justify-between">
         <div>
           <a
@@ -332,6 +387,12 @@ export function InvoiceCard({
         {!editing && (
           <div className="flex gap-2">
             <button
+              onClick={() => setShowAdjust((s) => !s)}
+              className="px-4 py-2 border border-border text-foreground text-sm font-medium rounded hover:border-accent hover:text-accent transition-colors"
+            >
+              {showAdjust ? "Cancel" : "Add adjustment"}
+            </button>
+            <button
               onClick={handleApprove}
               disabled={approving}
               className="px-4 py-2 border border-border text-foreground text-sm font-medium rounded hover:border-accent hover:text-accent transition-colors disabled:opacity-50"
@@ -348,6 +409,76 @@ export function InvoiceCard({
           </div>
         )}
       </div>
+
+      {showAdjust && (
+        <div className="mt-3 pt-3 border-t border-border bg-background/50 rounded p-3">
+          <div className="grid grid-cols-1 md:grid-cols-[140px_120px_1fr_auto] gap-2 items-end">
+            <div>
+              <label className="text-xs text-muted font-medium block mb-1">Kind</label>
+              <select
+                value={adjustKind}
+                onChange={(e) => setAdjustKind(e.target.value as typeof adjustKind)}
+                className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm outline-none focus:border-accent"
+              >
+                <option value="credit">Credit (−)</option>
+                <option value="discount">Discount (−)</option>
+                <option value="expense">Expense (+)</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-muted font-medium block mb-1">Amount</label>
+              <div className="flex items-center">
+                <span className="text-sm text-muted mr-1">$</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={adjustAmount}
+                  onChange={(e) => setAdjustAmount(e.target.value)}
+                  className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm font-mono outline-none focus:border-accent"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs text-muted font-medium block mb-1">Description</label>
+              <input
+                type="text"
+                value={adjustDescription}
+                onChange={(e) => setAdjustDescription(e.target.value)}
+                placeholder="e.g. Travel reimbursement"
+                className="w-full bg-background border border-border rounded px-2 py-1.5 text-sm outline-none focus:border-accent"
+              />
+            </div>
+            <button
+              onClick={handleAdjust}
+              disabled={adjusting || !adjustAmount || !adjustDescription}
+              className="px-4 py-1.5 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors disabled:opacity-50"
+            >
+              {adjusting ? "Adding…" : "Add"}
+            </button>
+          </div>
+          {adjustError && (
+            <p className="text-xs text-error mt-2">{adjustError}</p>
+          )}
+        </div>
+      )}
+
+      {snapshot && (
+        <p className="mt-3 pt-3 border-t border-border text-xs text-muted">
+          Recipient:{" "}
+          <span className="font-mono">
+            {snapshot.snapshotBillingEmail ?? "—"}
+          </span>
+          {snapshot.snapshotBillingCcEmails.length > 0 && (
+            <>
+              {" · CC: "}
+              <span className="font-mono">
+                {snapshot.snapshotBillingCcEmails.join(", ")}
+              </span>
+            </>
+          )}
+          {" — from snapshot"}
+        </p>
+      )}
     </div>
   );
 }
