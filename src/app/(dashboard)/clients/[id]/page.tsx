@@ -26,11 +26,21 @@ export default async function ClientDossierPage({
       client={{
         id: client.id,
         name: client.name,
+        displayName: client.displayName,
         email: client.email,
         phone: client.phone,
         company: client.company,
         hourlyRate: Number(client.hourlyRate),
         billingCadence: client.billingCadence,
+        customCadenceDays: client.customCadenceDays,
+        billingContactName: client.billingContactName,
+        billingContactEmail: client.billingContactEmail,
+        secondaryEmails: client.secondaryEmails,
+        billingPausedUntil: client.billingPausedUntil
+          ? client.billingPausedUntil.toISOString()
+          : null,
+        billingNotes: client.billingNotes,
+        retainer: Number(client.retainer),
         meetingCadence: client.meetingCadence,
         allowsFathom: client.allowsFathom,
         status: client.status,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { CleanSlateModal } from "./clean-slate-modal";
 
 interface Settings {
   id: string;
@@ -9,12 +10,24 @@ interface Settings {
   businessName: string;
   defaultHourlyRate: number;
   defaultBillingCadence: string;
+  defaultBillingDayOfMonth: number | null;
+  autoApproveUnderCents: number | null;
+  invoicePrefix: string;
+  invoiceNumberPadding: number;
+  timezone: string;
   briefDeliveryMinutes: number;
   openaiApiKey: string | null;
   anthropicApiKey: string | null;
   stripeSecretKey: string | null;
   googleCalendarId: string | null;
   coachingTitleFilter: string | null;
+}
+
+interface ResetCounts {
+  invoices: number;
+  adjustments: number;
+  timeEntries: number;
+  clientsWithStripe: number;
 }
 
 export default function SettingsPage() {
@@ -25,12 +38,38 @@ export default function SettingsPage() {
     status: "idle" | "testing" | "connected" | "error";
     message?: string;
   }>({ status: "idle" });
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetCounts, setResetCounts] = useState<ResetCounts | null>(null);
+  const [resetToast, setResetToast] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/settings")
       .then((r) => r.json())
       .then(setSettings);
   }, []);
+
+  async function openResetModal() {
+    // Fetch live counts before opening so the modal shows accurate numbers
+    try {
+      const resp = await fetch("/api/admin/billing/reset-preview");
+      if (resp.ok) {
+        const data = await resp.json();
+        setResetCounts(data);
+      } else {
+        // Fallback if preview endpoint not yet built
+        setResetCounts({ invoices: 0, adjustments: 0, timeEntries: 0, clientsWithStripe: 0 });
+      }
+    } catch {
+      setResetCounts({ invoices: 0, adjustments: 0, timeEntries: 0, clientsWithStripe: 0 });
+    }
+    setResetModalOpen(true);
+  }
+
+  function handleResetComplete() {
+    setResetModalOpen(false);
+    setResetToast("Billing data reset. All invoices wiped, time entries restored.");
+    setTimeout(() => setResetToast(null), 5000);
+  }
 
   async function handleSave() {
     if (!settings) return;
@@ -64,7 +103,7 @@ export default function SettingsPage() {
     );
   }
 
-  function update(field: keyof Settings, value: string) {
+  function update(field: keyof Settings, value: string | number | null) {
     setSettings({ ...settings!, [field]: value });
   }
 
@@ -199,7 +238,7 @@ export default function SettingsPage() {
         </Section>
 
         {/* Billing Defaults */}
-        <Section title="Billing Defaults">
+        <Section title="Billing Defaults" description="House rules for new clients. Per-client values override these.">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="text-xs text-muted font-medium block mb-1.5">Default Billing Cadence</label>
@@ -211,8 +250,37 @@ export default function SettingsPage() {
                 <option value="WEEKLY">Weekly</option>
                 <option value="BIWEEKLY">Biweekly</option>
                 <option value="MONTHLY">Monthly</option>
+                <option value="CUSTOM_DAYS">Custom days</option>
               </select>
             </div>
+            <Field
+              label="Default Day of Month (1-28)"
+              value={settings.defaultBillingDayOfMonth?.toString() ?? ""}
+              onChange={(v) => update("defaultBillingDayOfMonth", v === "" ? null : Number(v))}
+              type="number"
+              placeholder="e.g. 1 for the 1st"
+            />
+            <Field
+              label="Auto-approve under (cents)"
+              value={settings.autoApproveUnderCents?.toString() ?? ""}
+              onChange={(v) => update("autoApproveUnderCents", v === "" ? null : Number(v))}
+              type="number"
+              placeholder="Leave empty to disable"
+            />
+            <Field
+              label="Invoice Number Prefix"
+              value={settings.invoicePrefix}
+              onChange={(v) => update("invoicePrefix", v)}
+              placeholder="CIQ"
+              mono
+            />
+            <Field
+              label="Timezone"
+              value={settings.timezone}
+              onChange={(v) => update("timezone", v)}
+              placeholder="America/Chicago"
+              mono
+            />
             <Field
               label="Prep Brief Delivery (minutes before session)"
               value={String(settings.briefDeliveryMinutes)}
@@ -221,7 +289,44 @@ export default function SettingsPage() {
             />
           </div>
         </Section>
+
+        {/* Danger Zone */}
+        <Section
+          title="Danger Zone"
+          description="Irreversible operations. Use only when rebuilding billing state from scratch."
+        >
+          {resetToast && (
+            <div className="mb-3 px-3 py-2 bg-success/10 border border-success/30 text-success text-sm rounded">
+              {resetToast}
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <p className="text-sm font-medium text-foreground">Reset all billing data</p>
+              <p className="text-xs text-muted mt-1">
+                Deletes every invoice and adjustment, resets time entries to unbilled.
+                Stripe customers preserved by default.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={openResetModal}
+              className="px-4 py-2 text-sm font-medium border border-error/40 text-error rounded hover:bg-error/10 transition-colors"
+            >
+              Reset billing data…
+            </button>
+          </div>
+        </Section>
       </div>
+
+      {resetModalOpen && resetCounts && (
+        <CleanSlateModal
+          open={resetModalOpen}
+          onClose={() => setResetModalOpen(false)}
+          onComplete={handleResetComplete}
+          counts={resetCounts}
+        />
+      )}
     </div>
   );
 }

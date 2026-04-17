@@ -35,13 +35,21 @@ export async function POST(
   }
 
   try {
-    // 1. Get or create Stripe Customer
+    // 1. Get or create Stripe Customer using SNAPSHOT fields, not live client
+    // data. Snapshots are taken at draft creation and frozen until "Refresh
+    // from client" — this guarantees the Stripe customer/invoice match what
+    // Todd reviewed in the draft, not whatever the client record looks like
+    // right now (which may have drifted post-snapshot).
+    const billingName = invoice.snapshotClientName ?? invoice.client.name;
+    const billingEmail = invoice.snapshotBillingEmail ?? invoice.client.email;
+    const billingCcEmails = invoice.snapshotBillingCcEmails ?? [];
+
     let stripeCustomerId = invoice.client.stripeCustomerId;
 
     if (!stripeCustomerId) {
       const customer = await getStripe().customers.create({
-        name: invoice.client.name,
-        email: invoice.client.email,
+        name: billingName,
+        email: billingEmail,
         metadata: { coachiq_client_id: invoice.client.id },
       });
       stripeCustomerId = customer.id;
@@ -65,6 +73,13 @@ export async function POST(
       customer: stripeCustomerId,
       collection_method: "send_invoice",
       days_until_due: 30,
+      // Stripe sends the invoice email to the customer's primary email; CC
+      // emails get added as custom fields visible on the hosted invoice page.
+      // (Stripe API does not expose a true "BCC" — custom fields are the
+      // closest thing while keeping addresses visible to the recipient.)
+      custom_fields: billingCcEmails.length > 0
+        ? [{ name: "CC", value: billingCcEmails.join(", ") }]
+        : undefined,
       metadata: {
         coachiq_invoice_id: invoice.id,
         coachiq_invoice_number: invoice.invoiceNumber,

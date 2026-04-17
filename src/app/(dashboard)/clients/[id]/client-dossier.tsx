@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ClientInsights } from "@/components/client-insights";
+import { BillingTab } from "./billing-tab";
 
 interface Session {
   id: string;
@@ -19,11 +20,19 @@ interface Session {
 interface ClientData {
   id: string;
   name: string;
+  displayName: string | null;
   email: string;
   phone: string | null;
   company: string | null;
   hourlyRate: number;
-  billingCadence: string;
+  billingCadence: "WEEKLY" | "BIWEEKLY" | "MONTHLY" | "CUSTOM_DAYS";
+  customCadenceDays: number | null;
+  billingContactName: string | null;
+  billingContactEmail: string | null;
+  secondaryEmails: string[];
+  billingPausedUntil: string | null;
+  billingNotes: string | null;
+  retainer: number;
   meetingCadence: string;
   allowsFathom: boolean;
   status: string;
@@ -35,10 +44,13 @@ interface ClientData {
   sessions: Session[];
 }
 
+type DossierTab = "overview" | "sessions" | "intelligence" | "billing";
+
 export function ClientDossier({ client }: { client: ClientData }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState<DossierTab>("overview");
   const [form, setForm] = useState({
     name: client.name,
     email: client.email,
@@ -51,11 +63,6 @@ export function ClientDossier({ client }: { client: ClientData }) {
     status: client.status,
     notes: client.notes || "",
   });
-
-  const totalBilledHours = client.sessions.reduce(
-    (sum, s) => sum + s.billableMinutes / 60,
-    0
-  );
 
   function updateField(field: string, value: string) {
     setForm({ ...form, [field]: value });
@@ -344,14 +351,54 @@ export function ClientDossier({ client }: { client: ClientData }) {
         )}
       </div>
 
-      {/* Prep Brief */}
-      <PrepBriefSection clientId={client.id} clientName={client.name} hasSessions={client.sessions.length > 0} />
+      {/* Tab Strip */}
+      <div className="mt-6 border-b border-border flex items-center gap-6">
+        <TabButton label="Overview" active={tab === "overview"} onClick={() => setTab("overview")} />
+        <TabButton label="Sessions" active={tab === "sessions"} onClick={() => setTab("sessions")} />
+        <TabButton label="Intelligence" active={tab === "intelligence"} onClick={() => setTab("intelligence")} />
+        <TabButton label="Billing" active={tab === "billing"} onClick={() => setTab("billing")} />
+      </div>
 
-      {/* Coaching Insights */}
-      <ClientInsights clientId={client.id} clientName={client.name} />
+      {/* Tab: Overview */}
+      {tab === "overview" && (
+        <div className="mt-6">
+          <PrepBriefSection clientId={client.id} clientName={client.name} hasSessions={client.sessions.length > 0} />
+        </div>
+      )}
 
-      {/* Session Timeline */}
-      <div className="mt-8">
+      {/* Tab: Intelligence */}
+      {tab === "intelligence" && (
+        <div className="mt-6">
+          <ClientInsights clientId={client.id} clientName={client.name} />
+        </div>
+      )}
+
+      {/* Tab: Billing */}
+      {tab === "billing" && (
+        <div className="mt-6">
+          <BillingTab
+            client={{
+              id: client.id,
+              name: client.name,
+              displayName: client.displayName,
+              email: client.email,
+              hourlyRate: client.hourlyRate,
+              billingCadence: client.billingCadence,
+              customCadenceDays: client.customCadenceDays,
+              billingContactName: client.billingContactName,
+              billingContactEmail: client.billingContactEmail,
+              secondaryEmails: client.secondaryEmails,
+              billingPausedUntil: client.billingPausedUntil,
+              billingNotes: client.billingNotes,
+              retainer: client.retainer,
+            }}
+          />
+        </div>
+      )}
+
+      {/* Tab: Sessions */}
+      {tab === "sessions" && (
+      <div className="mt-6">
         <h2 className="font-display text-xl text-foreground mb-4">
           Recent Sessions
         </h2>
@@ -417,17 +464,38 @@ export function ClientDossier({ client }: { client: ClientData }) {
           </div>
         )}
       </div>
-
-      {/* Billing Summary */}
-      <div className="mt-10">
-        <h2 className="font-display text-xl text-foreground mb-4">Billing</h2>
-        <div className="space-y-0">
-          <BillingRow label="Total Sessions" value={`${client.sessionCount} sessions`} />
-          <BillingRow label="Total Hours" value={`${totalBilledHours.toFixed(1)} hrs`} />
-          <BillingRow label="Rate" value={`$${client.hourlyRate}/hr`} />
-        </div>
-      </div>
+      )}
     </div>
+  );
+}
+
+function TabButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative pb-3 text-sm font-medium transition-colors ${
+        active
+          ? "text-foreground"
+          : "text-muted hover:text-foreground"
+      }`}
+    >
+      {label}
+      {active && (
+        <span
+          aria-hidden
+          className="absolute -bottom-px left-0 right-0 h-0.5 bg-accent"
+        />
+      )}
+    </button>
   );
 }
 
@@ -530,15 +598,6 @@ function MetaStat({ label, value, accent }: { label: string; value: string; acce
       <p className={`font-mono text-sm font-medium ${accent ? "text-accent" : "text-foreground"}`}>
         {value}
       </p>
-    </div>
-  );
-}
-
-function BillingRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between items-center py-2 border-b border-border last:border-b-0">
-      <span className="text-sm text-muted">{label}</span>
-      <span className="font-mono text-sm font-medium text-foreground">{value}</span>
     </div>
   );
 }
