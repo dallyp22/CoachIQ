@@ -46,6 +46,13 @@
 
 ## Billing Follow-ups (post-overhaul)
 
+### Wire up Vitest integration tests against test Neon branch
+**What:** Lane C shipped pure-function unit tests (43 tests across cadence math + snapshot/detectDrift). The DB-touching code paths still have zero test coverage: `generateInvoiceForClient` (advisory lock + retainer math + snapshot persistence + sequence allocation), `/api/admin/billing/reset` (transactional rollback semantics), `allocateInvoiceNumber` (collision under concurrent runs).
+**Why:** These are the highest-blast-radius surfaces. A bug here shows up as bad invoices going to real clients.
+**Fix path:** Spin up a separate Neon branch (`coachiq-test`), set `DATABASE_URL_TEST` env, add a Vitest setup file that runs `prisma migrate deploy` against it before the suite and resets between tests via a transactional wrapper (open transaction → run test logic → rollback). ~15-20 integration tests.
+**Depends on:** Nothing.
+**Added:** 2026-04-16 via Lane C (intentional scope cut to ship sooner).
+
 ### Shadow pgvector columns in schema.prisma to prevent accidental drop
 **What:** `transcripts.embedding vector(1536)` and `transcripts.search_text` are managed via raw SQL outside Prisma (per the comment at `prisma/schema.prisma:166-167`). Prisma doesn't see them. Any future `prisma migrate dev` run will detect them as "drift" and try to DROP them — destroying 602+ rows of expensive pgvector embeddings + full-text search data.
 **Why:** Discovered during the billing overhaul migration generation on 2026-04-16: `prisma migrate dev` warned "You are about to drop the column `embedding` on the `transcripts` table, which still contains 602 non-null values." This is a latent footgun on the project. The billing migration was hand-written to avoid the drop, but the next dev who runs `prisma migrate dev` could lose the data unless this is fixed.
