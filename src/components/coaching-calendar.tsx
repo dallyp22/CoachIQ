@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { DayBrief } from "@/components/day-brief";
 
 type ViewMode = "day" | "week" | "month";
 
@@ -303,10 +304,8 @@ export function CoachingCalendar() {
 
       {/* Morning brief */}
       {morningBriefExpanded && morningBrief && (
-        <div className="mt-4 bg-surface border border-border border-l-3 border-l-accent rounded-r-[var(--radius-md)] p-5">
-          <div className="prose prose-sm max-w-none text-foreground text-sm leading-relaxed whitespace-pre-line [&_strong]:font-semibold [&_strong]:text-foreground">
-            {morningBrief}
-          </div>
+        <div className="mt-4">
+          <DayBrief brief={morningBrief} />
         </div>
       )}
 

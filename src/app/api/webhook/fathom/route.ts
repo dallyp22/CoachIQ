@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { generateSynopsis, getOpenAIKey } from "@/lib/ai";
+import {
+  ensureClientFolder,
+  ensurePendingFolder,
+  hasDriveCredentials,
+  writeTranscript,
+} from "@/lib/google-drive";
 import crypto from "crypto";
 
 const WEBHOOK_SECRET = process.env.COACHIQ_FATHOM_WEBHOOK_SECRET || "";
@@ -83,8 +89,36 @@ export async function POST(request: NextRequest) {
   });
 
   if (!client) {
-    // Unknown client — log for review
+    // Unknown client — log for review and stash a copy in Drive's _Pending Review
+    // folder so the transcript isn't lost while the client gets registered.
     console.warn(`Unknown client: ${external.name} (${clientEmail}) — ${title}`);
+
+    if (hasDriveCredentials()) {
+      try {
+        const pendingDate = body.recording_start_time
+          ? new Date(body.recording_start_time)
+          : new Date();
+        const pendingContent = formatTranscript(
+          title,
+          external.name || clientEmail,
+          pendingDate,
+          body.transcript || [],
+          body.default_summary,
+          body.action_items,
+          body.url
+        );
+        const pendingFolder = await ensurePendingFolder();
+        await writeTranscript({
+          clientName: external.name || clientEmail,
+          filename: `${external.name || clientEmail}_${recordingId}.txt`,
+          content: pendingContent,
+          folderId: pendingFolder,
+        });
+      } catch (driveErr) {
+        console.error("Pending Drive write failed:", driveErr);
+      }
+    }
+
     return NextResponse.json({
       status: "pending_review",
       name: external.name || clientEmail,
@@ -179,7 +213,42 @@ export async function POST(request: NextRequest) {
     return sess;
   });
 
-  // 7. Generate embedding + synopsis inline (non-blocking — respond first, then process)
+  // 7. Save the formatted transcript to Drive under the client's folder.
+  //    The DB row is the source of truth for the app; Drive is Todd's portable
+  //    archive. A Drive failure must not fail the webhook — Fathom would retry
+  //    and create no new value (idempotency on fathomRecordingId blocks the
+  //    second attempt anyway). We log and leave transcriptDriveId null.
+  const driveWork = (async () => {
+    if (!hasDriveCredentials()) return;
+    try {
+      let folderId = client.driveFolderId;
+      if (!folderId) {
+        folderId = await ensureClientFolder(client.name);
+        await prisma.client.update({
+          where: { id: client.id },
+          data: { driveFolderId: folderId },
+        });
+      }
+
+      const dateStr = sessionDate.toISOString().slice(0, 10); // YYYY-MM-DD
+      const filename = `${client.name}_${dateStr}_${recordingId}.txt`;
+      const driveFileId = await writeTranscript({
+        clientName: client.name,
+        filename,
+        content: fullText,
+        folderId,
+      });
+
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { transcriptDriveId: driveFileId },
+      });
+    } catch (e) {
+      console.error("Drive write failed:", e);
+    }
+  })();
+
+  // 8. Generate embedding + synopsis inline (non-blocking — respond first, then process)
   // Use waitUntil-style: fire and don't block the webhook response
   const aiWork = (async () => {
     if (transcriptData.length === 0) return;
@@ -244,8 +313,8 @@ export async function POST(request: NextRequest) {
     }
   })();
 
-  // Wait for AI work to complete before responding (adds ~3-5s but ensures data is ready)
-  await aiWork;
+  // Wait for Drive + AI work to complete before responding (adds ~3-5s but ensures data is ready)
+  await Promise.all([driveWork, aiWork]);
 
   return NextResponse.json({
     status: "processed",
