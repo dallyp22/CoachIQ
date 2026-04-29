@@ -280,7 +280,42 @@ summary: 1-2 sentences on the day's tone — total billable hours, notable patte
     }
 
     const data = await aiResp.json();
-    const briefStructured = JSON.parse(data.choices[0].message.content);
+    const aiBrief = JSON.parse(data.choices[0].message.content) as {
+      schedule: { time: string; description: string }[];
+      scheduleNote: string | null;
+      perClient: { name: string; context: string; openingQuestion: string | null }[];
+      summary: string;
+    };
+
+    // Merge server-side action items into each perClient block. We don't ask
+    // the model to echo openActionItems — it costs tokens and risks paraphrase.
+    // Match on first name (the model uses first names in perClient.name) with
+    // a fallback on the full clientName for ambiguous cases.
+    const itemsByFirstName = new Map<string, string[]>();
+    const itemsByFullName = new Map<string, string[]>();
+    for (const s of sessionContexts) {
+      if (!s.openActionItems.length) continue;
+      const first = s.clientName.trim().split(/\s+/)[0]?.toLowerCase();
+      if (first && !itemsByFirstName.has(first)) {
+        itemsByFirstName.set(first, s.openActionItems);
+      }
+      itemsByFullName.set(s.clientName.trim().toLowerCase(), s.openActionItems);
+    }
+
+    const briefStructured = {
+      schedule: aiBrief.schedule,
+      scheduleNote: aiBrief.scheduleNote,
+      summary: aiBrief.summary,
+      perClient: aiBrief.perClient.map((p) => {
+        const first = p.name.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+        const full = p.name.trim().toLowerCase();
+        return {
+          ...p,
+          actionItems:
+            itemsByFullName.get(full) ?? itemsByFirstName.get(first) ?? [],
+        };
+      }),
+    };
 
     // Surface unmatched-attendee warnings so Todd knows to add the email to
     // the client's secondaryEmails. These show up in Vercel function logs.

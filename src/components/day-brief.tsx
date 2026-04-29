@@ -10,6 +10,7 @@ export interface DayBriefData {
     name: string;
     context: string;
     openingQuestion: string | null;
+    actionItems?: string[];
   }[];
   summary: string;
 }
@@ -66,6 +67,29 @@ export function DayBrief({ brief }: { brief: DayBriefData }) {
                     <p className="text-sm text-foreground/85 leading-relaxed mt-1">
                       {row.context}
                     </p>
+                    {row.actionItems && row.actionItems.length > 0 && (
+                      <div className="mt-2">
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-accent">
+                          Open commitments from last session
+                        </div>
+                        <ul className="mt-1 space-y-1">
+                          {row.actionItems.map((item, j) => (
+                            <li
+                              key={j}
+                              className="text-sm text-foreground/85 leading-relaxed flex gap-2"
+                            >
+                              <span
+                                aria-hidden
+                                className="text-muted select-none mt-1 leading-none"
+                              >
+                                •
+                              </span>
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                     {row.openingQuestion && (
                       <p className="mt-2 text-sm italic text-foreground/75 leading-relaxed">
                         <span className="not-italic text-[10px] font-mono uppercase tracking-wider text-accent mr-2">
