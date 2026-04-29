@@ -6,7 +6,10 @@ import { prisma } from "@/lib/db";
  */
 export async function getOpenAIKey(): Promise<string> {
   const settings = await prisma.coachSettings.findFirst();
-  const key = settings?.openaiApiKey || process.env.OPEN_AI_API || process.env.OPENAI_API_KEY;
+  const key =
+    settings?.openaiApiKey ||
+    process.env.OPEN_AI_API ||
+    process.env.OPENAI_API_KEY;
   if (!key) throw new Error("No OpenAI API key configured");
   return key;
 }
@@ -21,28 +24,72 @@ export async function getAnthropicKey(): Promise<string> {
   return key;
 }
 
+export interface ChatProvider {
+  apiUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  extraHeaders?: Record<string, string>;
+}
+
 /**
- * Generate a coaching session synopsis using OpenAI GPT-4o-mini.
+ * Pick the chat-completion provider. OpenRouter is preferred when
+ * OPENROUTER_API_KEY is set — gives us model flexibility (Claude, GPT,
+ * Gemini) behind one OpenAI-compatible API. Falls back to OpenAI directly.
+ *
+ * Override the model with the BRIEF_MODEL env var. Sensible defaults:
+ *   - OpenRouter present  → anthropic/claude-sonnet-4.6
+ *   - OpenAI fallback     → gpt-4o-mini
+ */
+export async function getChatProvider(): Promise<ChatProvider> {
+  const orKey = process.env.OPENROUTER_API_KEY;
+  if (orKey) {
+    return {
+      apiUrl: "https://openrouter.ai/api/v1/chat/completions",
+      apiKey: orKey,
+      defaultModel:
+        process.env.BRIEF_MODEL || "anthropic/claude-sonnet-4.6",
+      extraHeaders: {
+        "HTTP-Referer":
+          process.env.OPENROUTER_REFERER || "https://coachiq.vercel.app",
+        "X-Title": "CoachIQ",
+      },
+    };
+  }
+  return {
+    apiUrl: "https://api.openai.com/v1/chat/completions",
+    apiKey: await getOpenAIKey(),
+    defaultModel: process.env.BRIEF_MODEL || "gpt-4o-mini",
+  };
+}
+
+/**
+ * Generate a coaching session synopsis. Routes through whatever chat
+ * provider is configured (OpenRouter > OpenAI). Pure text output, no
+ * json_schema — any modern chat model works.
  */
 export async function generateSynopsis(
   transcript: string,
   clientName: string,
   priorSynopses: string[] = []
 ): Promise<string> {
-  const apiKey = await getOpenAIKey();
+  const provider = await getChatProvider();
 
-  const contextBlock = priorSynopses.length > 0
-    ? `\n\nPRIOR SESSION SYNOPSES (most recent first):\n${priorSynopses.map((s, i) => `--- Session ${i + 1} ---\n${s}`).join("\n\n")}`
-    : "";
+  const contextBlock =
+    priorSynopses.length > 0
+      ? `\n\nPRIOR SESSION SYNOPSES (most recent first):\n${priorSynopses
+          .map((s, i) => `--- Session ${i + 1} ---\n${s}`)
+          .join("\n\n")}`
+      : "";
 
-  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+  const resp = await fetch(provider.apiUrl, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${provider.apiKey}`,
       "Content-Type": "application/json",
+      ...(provider.extraHeaders ?? {}),
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: provider.defaultModel,
       messages: [
         {
           role: "system",
@@ -69,7 +116,7 @@ Write in third person, present tense. Be specific about what was discussed, not 
 
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`OpenAI API error ${resp.status}: ${err.slice(0, 200)}`);
+    throw new Error(`Chat API error ${resp.status}: ${err.slice(0, 200)}`);
   }
 
   const data = await resp.json();

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { getOpenAIKey } from "@/lib/ai";
+import { getChatProvider } from "@/lib/ai";
 
 /**
  * Generate a prep brief for a client.
@@ -26,7 +26,7 @@ export async function generatePrepBrief(
     throw new Error("No sessions with synopses available");
   }
 
-  const apiKey = await getOpenAIKey();
+  const provider = await getChatProvider();
 
   const synopsesContext = client.sessions
     .map((s) => {
@@ -43,14 +43,15 @@ export async function generatePrepBrief(
     })
     .join("\n\n");
 
-  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+  const resp = await fetch(provider.apiUrl, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${provider.apiKey}`,
       "Content-Type": "application/json",
+      ...(provider.extraHeaders ?? {}),
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: provider.defaultModel,
       messages: [
         {
           role: "system",
@@ -83,7 +84,7 @@ ${synopsesContext}`,
 
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`OpenAI error ${resp.status}: ${err.slice(0, 200)}`);
+    throw new Error(`Chat API error ${resp.status}: ${err.slice(0, 200)}`);
   }
 
   const data = await resp.json();

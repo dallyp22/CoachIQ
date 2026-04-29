@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getOpenAIKey } from "@/lib/ai";
+import { getChatProvider } from "@/lib/ai";
 import {
   getCalendar,
   filterCoachingEvents,
@@ -170,7 +170,7 @@ export async function GET() {
     }
 
     // Generate AI morning brief
-    const apiKey = await getOpenAIKey();
+    const provider = await getChatProvider();
 
     const userPayload = {
       date: today,
@@ -193,14 +193,15 @@ export async function GET() {
       0
     );
 
-    const aiResp = await fetch("https://api.openai.com/v1/chat/completions", {
+    const aiResp = await fetch(provider.apiUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${provider.apiKey}`,
         "Content-Type": "application/json",
+        ...(provider.extraHeaders ?? {}),
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: provider.defaultModel,
         temperature: 0.3,
         max_tokens: 900,
         response_format: {
