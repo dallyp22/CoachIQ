@@ -1,11 +1,28 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 
 interface WordData {
   text: string;
   count: number;
   weight: number;
+}
+
+interface WordContextMatch {
+  sessionId: string;
+  clientId: string;
+  clientName: string;
+  date: string;
+  title: string;
+  snippet: string;
+}
+
+interface WordContextResponse {
+  word: string;
+  source: "synopsis" | "transcript";
+  total: number;
+  matches: WordContextMatch[];
 }
 
 interface ClientOption {
@@ -23,6 +40,10 @@ export function WordCloudSection() {
   const [source, setSource] = useState<"synopsis" | "transcript">("synopsis");
   const [totalTexts, setTotalTexts] = useState(0);
   const [hoveredWord, setHoveredWord] = useState<WordData | null>(null);
+  const [selectedWord, setSelectedWord] = useState<string | null>(null);
+  const [context, setContext] = useState<WordContextResponse | null>(null);
+  const [contextLoading, setContextLoading] = useState(false);
+  const [contextError, setContextError] = useState<string | null>(null);
 
   // Load client list
   useEffect(() => {
@@ -69,6 +90,45 @@ export function WordCloudSection() {
   }, [selectedClient, startDate, endDate, source]);
 
   useEffect(() => { fetchWordCloud(); }, [fetchWordCloud]);
+
+  const fetchWordContext = useCallback(
+    async (word: string) => {
+      setContextLoading(true);
+      setContextError(null);
+      try {
+        const params = new URLSearchParams({ word, source });
+        if (selectedClient) params.set("clientId", selectedClient);
+        if (startDate) params.set("startDate", startDate);
+        if (endDate) params.set("endDate", endDate);
+        const resp = await fetch(`/api/analytics/word-context?${params}`);
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error ?? `HTTP ${resp.status}`);
+        setContext(data as WordContextResponse);
+      } catch (err) {
+        setContextError(err instanceof Error ? err.message : "Failed to load");
+        setContext(null);
+      } finally {
+        setContextLoading(false);
+      }
+    },
+    [source, selectedClient, startDate, endDate]
+  );
+
+  const handleWordClick = useCallback(
+    (word: WordData) => {
+      setSelectedWord(word.text);
+      void fetchWordContext(word.text);
+    },
+    [fetchWordContext]
+  );
+
+  // If the user changes the source/client/date filters while a word is
+  // selected, re-fetch context against the new scope.
+  useEffect(() => {
+    if (selectedWord) void fetchWordContext(selectedWord);
+    // We intentionally only react to scope changes, not selectedWord changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source, selectedClient, startDate, endDate]);
 
   return (
     <div className="bg-surface border border-border rounded-[var(--radius-lg)] p-6">
@@ -148,7 +208,9 @@ export function WordCloudSection() {
           <WordCloudSVG
             words={words}
             hoveredWord={hoveredWord}
+            selectedWord={selectedWord}
             onHover={setHoveredWord}
+            onClick={handleWordClick}
           />
           {hoveredWord && (
             <div className="absolute top-2 right-2 bg-foreground text-background px-3 py-1.5 rounded text-xs font-mono shadow-lg">
@@ -156,6 +218,119 @@ export function WordCloudSection() {
             </div>
           )}
         </div>
+      )}
+
+      {/* Click-through context panel */}
+      {selectedWord && (
+        <WordContextPanel
+          word={selectedWord}
+          source={source}
+          loading={contextLoading}
+          error={contextError}
+          context={context}
+          onClose={() => {
+            setSelectedWord(null);
+            setContext(null);
+            setContextError(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Context panel (rendered below the cloud on click) ────────────
+
+function WordContextPanel({
+  word,
+  source,
+  loading,
+  error,
+  context,
+  onClose,
+}: {
+  word: string;
+  source: "synopsis" | "transcript";
+  loading: boolean;
+  error: string | null;
+  context: WordContextResponse | null;
+  onClose: () => void;
+}) {
+  const matches = context?.matches ?? [];
+
+  return (
+    <div className="mt-6 border-t border-border pt-5">
+      <div className="flex items-baseline justify-between mb-3">
+        <div>
+          <h3 className="font-display text-base text-foreground">
+            &ldquo;{word}&rdquo;
+            {!loading && context && (
+              <span className="text-muted text-sm font-body ml-2">
+                — {context.total}{" "}
+                {context.total === 1 ? "match" : "matches"} in{" "}
+                {source === "synopsis" ? "synopses" : "transcripts"}
+              </span>
+            )}
+          </h3>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-xs text-accent hover:underline"
+          aria-label="Close context panel"
+        >
+          Close
+        </button>
+      </div>
+
+      {loading && (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-14 bg-border/30 rounded animate-pulse" />
+          ))}
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="text-sm text-error font-mono break-words">{error}</div>
+      )}
+
+      {!loading && !error && matches.length === 0 && (
+        <div className="text-sm text-muted">
+          No matches under the current filters.
+        </div>
+      )}
+
+      {!loading && !error && matches.length > 0 && (
+        <ul className="space-y-3">
+          {matches.map((m) => (
+            <li
+              key={m.sessionId}
+              className="border-l border-border pl-4 py-1"
+            >
+              <Link
+                href={`/clients/${m.clientId}#session-${m.sessionId}`}
+                className="block group"
+              >
+                <div className="flex items-baseline gap-3">
+                  <span className="font-mono text-xs text-muted tabular-nums shrink-0">
+                    {new Date(m.date).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                  </span>
+                  <span className="font-display text-sm text-foreground group-hover:text-accent transition-colors truncate">
+                    {m.clientName}
+                  </span>
+                </div>
+                <p
+                  className="mt-1 text-sm text-foreground/80 leading-relaxed [&_mark]:bg-[var(--accent-light,#FEF3C7)] [&_mark]:text-foreground [&_mark]:px-0.5 [&_mark]:rounded"
+                  dangerouslySetInnerHTML={{ __html: m.snippet }}
+                />
+              </Link>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -166,11 +341,15 @@ export function WordCloudSection() {
 function WordCloudSVG({
   words,
   hoveredWord,
+  selectedWord,
   onHover,
+  onClick,
 }: {
   words: WordData[];
   hoveredWord: WordData | null;
+  selectedWord: string | null;
   onHover: (w: WordData | null) => void;
+  onClick: (w: WordData) => void;
 }) {
   const width = 800;
   const height = 320;
@@ -183,6 +362,7 @@ function WordCloudSVG({
       {positions.map((pos, i) => {
         const word = words[i];
         const isHovered = hoveredWord?.text === word.text;
+        const isSelected = selectedWord === word.text;
         const fontSize = Math.max(11, Math.min(48, 11 + word.weight * 37));
         const opacity = word.weight * 0.7 + 0.3;
 
@@ -193,22 +373,38 @@ function WordCloudSVG({
             ? "var(--foreground)"
             : "var(--muted)";
 
+        const active = isHovered || isSelected;
+
         return (
           <text
             key={word.text}
             x={pos.x}
             y={pos.y}
             fontSize={fontSize}
-            fill={isHovered ? "var(--accent)" : color}
-            opacity={isHovered ? 1 : opacity}
+            fill={active ? "var(--accent)" : color}
+            opacity={active ? 1 : opacity}
             textAnchor="middle"
             dominantBaseline="middle"
             fontFamily="var(--font-body, 'DM Sans', sans-serif)"
-            fontWeight={word.weight > 0.4 ? 600 : 400}
-            className="transition-all duration-150 cursor-default select-none"
-            style={{ transform: isHovered ? "scale(1.1)" : "scale(1)", transformOrigin: `${pos.x}px ${pos.y}px` }}
+            fontWeight={isSelected || word.weight > 0.4 ? 600 : 400}
+            className="transition-all duration-150 cursor-pointer select-none"
+            style={{
+              transform: active ? "scale(1.1)" : "scale(1)",
+              transformOrigin: `${pos.x}px ${pos.y}px`,
+              textDecoration: isSelected ? "underline" : undefined,
+              textUnderlineOffset: "0.2em",
+            }}
             onMouseEnter={() => onHover(word)}
             onMouseLeave={() => onHover(null)}
+            onClick={() => onClick(word)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick(word);
+              }
+            }}
           >
             {word.text}
           </text>
