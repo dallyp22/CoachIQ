@@ -144,6 +144,7 @@ export function CoachingCalendar() {
   const [morningBrief, setMorningBrief] = useState<DayBriefData | null>(null);
   const [morningBriefLoading, setMorningBriefLoading] = useState(false);
   const [morningBriefExpanded, setMorningBriefExpanded] = useState(false);
+  const [morningBriefError, setMorningBriefError] = useState<string | null>(null);
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
@@ -235,13 +236,30 @@ export function CoachingCalendar() {
   }
 
   async function handleMorningBrief() {
-    if (morningBrief && !morningBriefLoading) { setMorningBriefExpanded(!morningBriefExpanded); return; }
+    if (morningBrief && !morningBriefLoading) {
+      setMorningBriefExpanded(!morningBriefExpanded);
+      return;
+    }
     setMorningBriefLoading(true);
+    setMorningBriefError(null);
     try {
       const resp = await fetch("/api/daily-brief");
       const data = await resp.json();
-      if (data.brief) { setMorningBrief(data.brief); setMorningBriefExpanded(true); }
-    } finally { setMorningBriefLoading(false); }
+      if (data.brief) {
+        setMorningBrief(data.brief);
+        setMorningBriefExpanded(true);
+      } else {
+        setMorningBriefError(
+          data.error ? String(data.error) : `Brief request failed (${resp.status})`
+        );
+        setMorningBriefExpanded(true);
+      }
+    } catch (err) {
+      setMorningBriefError(err instanceof Error ? err.message : "Network error");
+      setMorningBriefExpanded(true);
+    } finally {
+      setMorningBriefLoading(false);
+    }
   }
 
   // Build event lookup by date
@@ -306,6 +324,16 @@ export function CoachingCalendar() {
       {morningBriefExpanded && morningBrief && (
         <div className="mt-4">
           <DayBrief brief={morningBrief} />
+        </div>
+      )}
+      {morningBriefExpanded && !morningBrief && morningBriefError && (
+        <div className="mt-4 bg-surface border border-error/40 border-l-2 border-l-error rounded-r-md px-4 py-3">
+          <div className="text-[11px] uppercase tracking-wider text-error font-medium">
+            Day Brief failed
+          </div>
+          <p className="mt-1 text-sm text-foreground/85 leading-relaxed font-mono break-words">
+            {morningBriefError}
+          </p>
         </div>
       )}
 

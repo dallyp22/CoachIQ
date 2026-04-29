@@ -193,6 +193,58 @@ export async function GET() {
       0
     );
 
+    // Use tool calling rather than response_format: json_schema. OpenRouter
+    // translates tool calls correctly across all providers (Anthropic,
+    // OpenAI, Google), whereas json_schema strict mode is OpenAI-specific
+    // and silently breaks on Claude/Gemini.
+    const briefSchema = {
+      type: "object",
+      properties: {
+        schedule: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              time: { type: "string" },
+              description: { type: "string" },
+            },
+            required: ["time", "description"],
+          },
+        },
+        scheduleNote: {
+          type: ["string", "null"],
+          description:
+            "One-line callout about back-to-back blocks, awkward gaps, or unusual density. Null if nothing notable.",
+        },
+        perClient: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "First name of the client." },
+              context: {
+                type: "string",
+                description:
+                  "2-3 sentences of what to remember and what to follow up on, drawn from lastSynopsis and openActionItems. Reference specifics, not generalities.",
+              },
+              openingQuestion: {
+                type: ["string", "null"],
+                description:
+                  "A single suggested opening question framed for this session. Null only if status === 'unknown'.",
+              },
+            },
+            required: ["name", "context", "openingQuestion"],
+          },
+        },
+        summary: {
+          type: "string",
+          description:
+            "1-2 sentences on the day's tone — total billable hours, notable patterns, anything Todd should mentally prepare for.",
+        },
+      },
+      required: ["schedule", "scheduleNote", "perClient", "summary"],
+    } as const;
+
     const aiResp = await fetch(provider.apiUrl, {
       method: "POST",
       headers: {
@@ -203,52 +255,26 @@ export async function GET() {
       body: JSON.stringify({
         model: provider.defaultModel,
         temperature: 0.3,
-        max_tokens: 900,
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "day_brief",
-            strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                schedule: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    additionalProperties: false,
-                    properties: {
-                      time: { type: "string" },
-                      description: { type: "string" },
-                    },
-                    required: ["time", "description"],
-                  },
-                },
-                scheduleNote: { type: ["string", "null"] },
-                perClient: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    additionalProperties: false,
-                    properties: {
-                      name: { type: "string" },
-                      context: { type: "string" },
-                      openingQuestion: { type: ["string", "null"] },
-                    },
-                    required: ["name", "context", "openingQuestion"],
-                  },
-                },
-                summary: { type: "string" },
-              },
-              required: ["schedule", "scheduleNote", "perClient", "summary"],
+        max_tokens: 1200,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "render_day_brief",
+              description:
+                "Render the structured day brief. Always call this exactly once with the complete brief.",
+              parameters: briefSchema,
             },
           },
+        ],
+        tool_choice: {
+          type: "function",
+          function: { name: "render_day_brief" },
         },
         messages: [
           {
             role: "system",
-            content: `You generate a start-of-day briefing for executive coach Todd Zimbelman. Return JSON matching the schema. Write in second person, use clients' first names, be specific and actionable. Total content under 350 words.
+            content: `You generate a start-of-day briefing for executive coach Todd Zimbelman. Call the render_day_brief tool exactly once with the complete brief. Write in second person, use clients' first names, be specific and actionable. Total content under 350 words.
 
 For each session, mirror it once in "schedule" (one-line: who/duration/title-style label) and once in "perClient":
   - context: 2-3 sentences of what to remember and what to follow up on, drawn from lastSynopsis and openActionItems. Reference specifics, not generalities.
@@ -276,16 +302,33 @@ summary: 1-2 sentences on the day's tone — total billable hours, notable patte
 
     if (!aiResp.ok) {
       const err = await aiResp.text();
-      throw new Error(`OpenAI error ${aiResp.status}: ${err.slice(0, 200)}`);
+      throw new Error(
+        `Chat API error ${aiResp.status} (model=${provider.defaultModel}): ${err.slice(0, 400)}`
+      );
     }
 
     const data = await aiResp.json();
-    const aiBrief = JSON.parse(data.choices[0].message.content) as {
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (!toolCall?.function?.arguments) {
+      const fallback = data.choices?.[0]?.message?.content ?? "";
+      throw new Error(
+        `Model did not return a tool call (model=${provider.defaultModel}). content="${String(fallback).slice(0, 200)}"`
+      );
+    }
+
+    let aiBrief: {
       schedule: { time: string; description: string }[];
       scheduleNote: string | null;
       perClient: { name: string; context: string; openingQuestion: string | null }[];
       summary: string;
     };
+    try {
+      aiBrief = JSON.parse(toolCall.function.arguments);
+    } catch (e) {
+      throw new Error(
+        `Tool call arguments were not valid JSON (model=${provider.defaultModel}): ${String(e).slice(0, 200)}`
+      );
+    }
 
     // Merge server-side action items into each perClient block. We don't ask
     // the model to echo openActionItems — it costs tokens and risks paraphrase.
