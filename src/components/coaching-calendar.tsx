@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { DayBrief } from "@/components/day-brief";
+import { DayBrief, type DayBriefData } from "@/components/day-brief";
 
 type ViewMode = "day" | "week" | "month";
 
@@ -141,7 +141,7 @@ export function CoachingCalendar() {
   const [loading, setLoading] = useState(true);
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
   const [generatingBrief, setGeneratingBrief] = useState<Set<string>>(new Set());
-  const [morningBrief, setMorningBrief] = useState<string | null>(null);
+  const [morningBrief, setMorningBrief] = useState<DayBriefData | null>(null);
   const [morningBriefLoading, setMorningBriefLoading] = useState(false);
   const [morningBriefExpanded, setMorningBriefExpanded] = useState(false);
 

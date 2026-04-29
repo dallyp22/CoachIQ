@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { DayBrief, type DayBriefData } from "@/components/day-brief";
 
 export function MorningBriefButton() {
-  const [brief, setBrief] = useState<string | null>(null);
+  const [brief, setBrief] = useState<DayBriefData | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
@@ -45,10 +46,8 @@ export function MorningBriefButton() {
       </button>
 
       {expanded && brief && (
-        <div className="mt-4 bg-surface border border-border border-l-3 border-l-accent rounded-r-[var(--radius-md)] p-5">
-          <div className="prose prose-sm max-w-none text-foreground text-sm leading-relaxed whitespace-pre-line [&_strong]:font-semibold [&_strong]:text-foreground">
-            {brief}
-          </div>
+        <div className="mt-4">
+          <DayBrief brief={brief} />
         </div>
       )}
     </div>
