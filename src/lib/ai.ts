@@ -41,7 +41,10 @@ export interface ChatProvider {
  *   - OpenAI fallback     → gpt-4o-mini
  */
 export async function getChatProvider(): Promise<ChatProvider> {
-  const orKey = process.env.OPENROUTER_API_KEY;
+  // Accept both naming conventions: OPENROUTER_API_KEY (OpenRouter docs)
+  // and OPEN_ROUTER_API_KEY (matches the OPEN_AI_API pattern already used here).
+  const orKey =
+    process.env.OPENROUTER_API_KEY || process.env.OPEN_ROUTER_API_KEY;
   if (orKey) {
     return {
       apiUrl: "https://openrouter.ai/api/v1/chat/completions",
