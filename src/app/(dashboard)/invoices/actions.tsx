@@ -401,8 +401,9 @@ export function InvoiceCard({
             </button>
             <button
               onClick={handleSend}
-              disabled={sending || sent}
-              className="px-4 py-2 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors disabled:opacity-50"
+              disabled={sending || sent || invoice.status === "DRAFT"}
+              title={invoice.status === "DRAFT" ? "Approve the invoice before sending" : undefined}
+              className="px-4 py-2 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {sent ? "Sent!" : sending ? "Sending..." : "Send via Stripe"}
             </button>

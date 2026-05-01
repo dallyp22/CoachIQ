@@ -16,16 +16,18 @@ export default async function InvoicesPage() {
   );
   const unbilledClients = new Set(unbilledEntries.map((e) => e.clientId)).size;
 
-  // Get draft invoices with full client data so we can detect snapshot drift
+  // Get draft + approved invoices with full client data so we can detect
+  // snapshot drift. APPROVED invoices stay in the staging queue alongside
+  // DRAFTs so the Send button remains reachable until the invoice is sent.
   const draftInvoices = await prisma.invoice.findMany({
-    where: { status: "DRAFT" },
+    where: { status: { in: ["DRAFT", "APPROVED"] } },
     include: { client: true },
     orderBy: { createdAt: "desc" },
   });
 
   // Get sent/paid/overdue invoices
   const invoiceHistory = await prisma.invoice.findMany({
-    where: { status: { in: ["SENT", "PAID", "OVERDUE", "APPROVED"] } },
+    where: { status: { in: ["SENT", "PAID", "OVERDUE"] } },
     include: { client: { select: { name: true, id: true } } },
     orderBy: { createdAt: "desc" },
     take: 20,
