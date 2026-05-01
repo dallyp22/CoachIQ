@@ -16,19 +16,22 @@ export default async function InvoicesPage() {
   );
   const unbilledClients = new Set(unbilledEntries.map((e) => e.clientId)).size;
 
-  // Get draft + approved invoices with full client data so we can detect
+  // Get draft + approved invoices with full billable data so we can detect
   // snapshot drift. APPROVED invoices stay in the staging queue alongside
   // DRAFTs so the Send button remains reachable until the invoice is sent.
   const draftInvoices = await prisma.invoice.findMany({
     where: { status: { in: ["DRAFT", "APPROVED"] } },
-    include: { client: true },
+    include: { client: true, group: { include: { members: true } } },
     orderBy: { createdAt: "desc" },
   });
 
   // Get sent/paid/overdue invoices
   const invoiceHistory = await prisma.invoice.findMany({
     where: { status: { in: ["SENT", "PAID", "OVERDUE"] } },
-    include: { client: { select: { name: true, id: true } } },
+    include: {
+      client: { select: { name: true, id: true } },
+      group: { select: { name: true, id: true } },
+    },
     orderBy: { createdAt: "desc" },
     take: 20,
   });
@@ -71,7 +74,16 @@ export default async function InvoicesPage() {
           </h2>
           <div className="space-y-3">
             {draftInvoices.map((invoice) => {
-              const driftedFields = detectDrift(invoice, invoice.client);
+              const billable = invoice.group
+                ? { kind: "group" as const, group: invoice.group, members: invoice.group.members }
+                : invoice.client
+                  ? { kind: "client" as const, client: invoice.client }
+                  : null;
+              const driftedFields = billable ? detectDrift(invoice, billable) : [];
+              const billableName = invoice.group
+                ? invoice.group.name
+                : invoice.client?.name ?? "Unknown";
+              const billableId = invoice.group?.id ?? invoice.client?.id ?? "";
               return (
                 <InvoiceCard
                   key={invoice.id}
@@ -92,8 +104,8 @@ export default async function InvoicesPage() {
                     createdAt: invoice.createdAt.toISOString(),
                     status: invoice.status,
                   }}
-                  clientName={invoice.snapshotClientName ?? invoice.client.name}
-                  clientId={invoice.client.id}
+                  clientName={invoice.snapshotClientName ?? billableName}
+                  clientId={billableId}
                   snapshot={{
                     snapshotClientName: invoice.snapshotClientName,
                     snapshotBillingEmail: invoice.snapshotBillingEmail,
@@ -154,7 +166,7 @@ export default async function InvoicesPage() {
                       {inv.invoiceNumber}
                     </td>
                     <td className="px-5 py-3 text-sm text-foreground">
-                      {inv.client.name}
+                      {inv.group?.name ?? inv.client?.name ?? "—"}
                     </td>
                     <td className="px-5 py-3">
                       <InvoiceStatusBadge status={inv.status} />

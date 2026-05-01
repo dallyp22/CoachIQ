@@ -30,7 +30,7 @@ async function main() {
   if (!invoice) throw new Error(`Invoice ${id} not found`);
   if (invoice.status === "PAID") throw new Error("Refusing to void a PAID invoice");
 
-  console.log(`${invoice.invoiceNumber} | ${invoice.status} | $${invoice.total} | ${invoice._count.timeEntries} entries | ${invoice.client.name}`);
+  console.log(`${invoice.invoiceNumber} | ${invoice.status} | $${invoice.total} | ${invoice._count.timeEntries} entries | ${invoice.client?.name ?? "(group)"}`);
 
   if (!apply) {
     console.log("\nDry run. Re-run with --apply to void.");

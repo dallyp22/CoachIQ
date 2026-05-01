@@ -1,47 +1,69 @@
 import type { Decimal } from "@prisma/client/runtime/client";
-import type { Client, Invoice } from "@/generated/prisma/client";
+import type { BillingGroup, Client, Invoice } from "@/generated/prisma/client";
 
 export interface InvoiceSnapshot {
   snapshotClientName: string;
   snapshotBillingEmail: string;
   snapshotBillingCcEmails: string[];
-  snapshotHourlyRate: Decimal;
+  // For group invoices with no group-level rate override and mixed-rate
+  // members, this is null (rate is per-line, not per-invoice).
+  snapshotHourlyRate: Decimal | null;
 }
 
+export type Billable =
+  | { kind: "client"; client: Client }
+  | { kind: "group"; group: BillingGroup; members: Client[] };
+
 /**
- * Capture a snapshot of the client's current billing-relevant fields.
- * Resolves displayName ?? name and billingContactEmail ?? email.
+ * Capture a snapshot of a billable's billing-relevant fields.
  *
  * Snapshots are taken once at DRAFT creation and frozen until "Refresh from
- * client" is explicitly clicked. This prevents post-hoc client edits from
- * silently mutating in-flight or sent invoices.
+ * billable" is explicitly clicked. This prevents post-hoc edits from silently
+ * mutating in-flight or sent invoices.
  */
-export function snapshotClient(client: Client): InvoiceSnapshot {
+export function snapshotBillable(b: Billable): InvoiceSnapshot {
+  if (b.kind === "client") {
+    return {
+      snapshotClientName: b.client.displayName ?? b.client.name,
+      snapshotBillingEmail: b.client.billingContactEmail ?? b.client.email,
+      snapshotBillingCcEmails: b.client.secondaryEmails ?? [],
+      snapshotHourlyRate: b.client.hourlyRate,
+    };
+  }
   return {
-    snapshotClientName: client.displayName ?? client.name,
-    snapshotBillingEmail: client.billingContactEmail ?? client.email,
-    snapshotBillingCcEmails: client.secondaryEmails ?? [],
-    snapshotHourlyRate: client.hourlyRate,
+    snapshotClientName: b.group.displayName ?? b.group.name,
+    snapshotBillingEmail: b.group.billingContactEmail,
+    snapshotBillingCcEmails: b.group.ccEmails ?? [],
+    // Null if group has no rate override (rate is per-line per-member);
+    // populated if group-level override is set.
+    snapshotHourlyRate: b.group.hourlyRate,
   };
 }
 
 /**
- * Compare an invoice's snapshot fields against the client's current values.
- * Returns the list of human-readable field labels that have drifted.
- *
- * Used by the snapshot-banner UI to render the Amber-100 nudge ONLY when
- * drift is detected (per the design review decision — banner stays sharp,
- * doesn't become wallpaper).
+ * Back-compat shim — call sites that still pass a raw Client get the same
+ * behavior they had before the Billable refactor. New code should call
+ * snapshotBillable directly.
  */
-export function detectDrift(invoice: Invoice, client: Client): string[] {
+export function snapshotClient(client: Client): InvoiceSnapshot {
+  return snapshotBillable({ kind: "client", client });
+}
+
+/**
+ * Compare an invoice's snapshot fields against the billable's current values.
+ * Returns the list of human-readable field labels that have drifted.
+ */
+export function detectDrift(invoice: Invoice, billable: Client | Billable): string[] {
+  const b: Billable =
+    "kind" in billable ? billable : { kind: "client", client: billable };
   const drifted: string[] = [];
-  const current = snapshotClient(client);
+  const current = snapshotBillable(b);
 
   if (
     invoice.snapshotClientName !== null &&
     invoice.snapshotClientName !== current.snapshotClientName
   ) {
-    drifted.push("display name");
+    drifted.push(b.kind === "group" ? "group name" : "display name");
   }
   if (
     invoice.snapshotBillingEmail !== null &&
@@ -57,6 +79,7 @@ export function detectDrift(invoice: Invoice, client: Client): string[] {
   }
   if (
     invoice.snapshotHourlyRate !== null &&
+    current.snapshotHourlyRate !== null &&
     !invoice.snapshotHourlyRate.equals(current.snapshotHourlyRate)
   ) {
     drifted.push("hourly rate");

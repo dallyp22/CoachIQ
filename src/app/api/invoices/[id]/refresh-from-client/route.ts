@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
-import { snapshotClient } from "@/lib/billing/snapshot";
+import { snapshotBillable } from "@/lib/billing/snapshot";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
 
 /**
@@ -27,7 +27,7 @@ export async function POST(
 
   const invoice = await prisma.invoice.findUnique({
     where: { id },
-    include: { client: true },
+    include: { client: true, group: { include: { members: true } } },
   });
   if (!invoice) {
     return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
@@ -42,7 +42,18 @@ export async function POST(
     );
   }
 
-  const snapshot = snapshotClient(invoice.client);
+  const billable = invoice.group
+    ? { kind: "group" as const, group: invoice.group, members: invoice.group.members }
+    : invoice.client
+      ? { kind: "client" as const, client: invoice.client }
+      : null;
+  if (!billable) {
+    return NextResponse.json(
+      { error: "Invoice has neither client nor group; data integrity violation" },
+      { status: 500 },
+    );
+  }
+  const snapshot = snapshotBillable(billable);
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -59,6 +70,7 @@ export async function POST(
         event: BillingEvent.INVOICE_REFRESHED,
         actor: userId,
         clientId: invoice.clientId,
+        groupId: invoice.groupId,
         invoiceId: id,
         payload: {
           newName: snapshot.snapshotClientName,

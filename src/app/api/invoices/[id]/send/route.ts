@@ -20,7 +20,7 @@ export async function POST(
 
   const invoice = await prisma.invoice.findUnique({
     where: { id },
-    include: { client: true },
+    include: { client: true, group: true },
   });
 
   if (!invoice) {
@@ -34,30 +34,56 @@ export async function POST(
     );
   }
 
+  // The invoice_billable_xor CHECK constraint guarantees exactly one of
+  // client / group is set. Narrow the type for TypeScript and pull the
+  // billing entity out for snapshot defaulting + Stripe customer caching.
+  const isGroup = invoice.group !== null;
+  if (!isGroup && !invoice.client) {
+    return NextResponse.json(
+      { error: "Invoice has neither client nor group; data integrity violation" },
+      { status: 500 }
+    );
+  }
+
   try {
-    // 1. Get or create Stripe Customer using SNAPSHOT fields, not live client
-    // data. Snapshots are taken at draft creation and frozen until "Refresh
-    // from client" — this guarantees the Stripe customer/invoice match what
-    // Todd reviewed in the draft, not whatever the client record looks like
-    // right now (which may have drifted post-snapshot).
-    const billingName = invoice.snapshotClientName ?? invoice.client.name;
-    const billingEmail = invoice.snapshotBillingEmail ?? invoice.client.email;
+    // 1. Get or create Stripe Customer using SNAPSHOT fields, not live data.
+    // Snapshots are taken at draft creation and frozen until "Refresh from
+    // billable" is clicked — this guarantees the Stripe customer/invoice
+    // match what Todd reviewed in the draft, not whatever the source record
+    // looks like right now (which may have drifted post-snapshot).
+    const fallbackName = isGroup ? invoice.group!.name : invoice.client!.name;
+    const fallbackEmail = isGroup
+      ? invoice.group!.billingContactEmail
+      : invoice.client!.email;
+    const billingName = invoice.snapshotClientName ?? fallbackName;
+    const billingEmail = invoice.snapshotBillingEmail ?? fallbackEmail;
     const billingCcEmails = invoice.snapshotBillingCcEmails ?? [];
 
-    let stripeCustomerId = invoice.client.stripeCustomerId;
+    let stripeCustomerId = isGroup
+      ? invoice.group!.stripeCustomerId
+      : invoice.client!.stripeCustomerId;
 
     if (!stripeCustomerId) {
       const customer = await getStripe().customers.create({
         name: billingName,
         email: billingEmail,
-        metadata: { coachiq_client_id: invoice.client.id },
+        metadata: isGroup
+          ? { coachiq_group_id: invoice.group!.id }
+          : { coachiq_client_id: invoice.client!.id },
       });
       stripeCustomerId = customer.id;
 
-      await prisma.client.update({
-        where: { id: invoice.client.id },
-        data: { stripeCustomerId },
-      });
+      if (isGroup) {
+        await prisma.billingGroup.update({
+          where: { id: invoice.group!.id },
+          data: { stripeCustomerId },
+        });
+      } else {
+        await prisma.client.update({
+          where: { id: invoice.client!.id },
+          data: { stripeCustomerId },
+        });
+      }
     }
 
     // 2. Create Stripe Invoice

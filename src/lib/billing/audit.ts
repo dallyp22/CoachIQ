@@ -26,6 +26,12 @@ export const BillingEvent = {
   RETAINER_APPLY: "RETAINER_APPLY",
   // Admin
   RESET: "RESET",
+  // Billing groups
+  GROUP_CREATED: "GROUP_CREATED",
+  GROUP_UPDATED: "GROUP_UPDATED",
+  GROUP_DELETED: "GROUP_DELETED",
+  GROUP_MEMBER_ADDED: "GROUP_MEMBER_ADDED",
+  GROUP_MEMBER_REMOVED: "GROUP_MEMBER_REMOVED",
 } as const;
 
 export type BillingEventName = (typeof BillingEvent)[keyof typeof BillingEvent];
@@ -34,6 +40,7 @@ export interface AuditEntry {
   event: BillingEventName;
   actor?: string | null;
   clientId?: string | null;
+  groupId?: string | null;
   invoiceId?: string | null;
   payload?: unknown;
 }
@@ -48,6 +55,7 @@ export async function logEvent(tx: Tx, entry: AuditEntry): Promise<void> {
       event: entry.event,
       actor: entry.actor ?? null,
       clientId: entry.clientId ?? null,
+      groupId: entry.groupId ?? null,
       invoiceId: entry.invoiceId ?? null,
       payload: (entry.payload ?? Prisma.JsonNull) as Prisma.InputJsonValue,
     },

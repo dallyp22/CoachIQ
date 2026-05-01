@@ -101,7 +101,8 @@ describe("snapshotClient", () => {
 
   it("captures hourlyRate as Decimal", () => {
     const c = makeClient({ hourlyRate: new Decimal(450.5) });
-    expect(snapshotClient(c).snapshotHourlyRate.equals(new Decimal(450.5))).toBe(true);
+    const rate = snapshotClient(c).snapshotHourlyRate;
+    expect(rate?.equals(new Decimal(450.5))).toBe(true);
   });
 });
 

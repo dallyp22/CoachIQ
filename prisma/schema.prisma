@@ -100,6 +100,7 @@ model Client {
   retainer            Decimal        @default(0) @db.Decimal(10, 2)
   meetingCadence      MeetingCadence @default(BIWEEKLY)
   stripeCustomerId    String?
+  billingGroupId      String?        @db.Uuid
   notebookId          String?
   driveFolderId       String?
   allowsFathom        Boolean        @default(true)
@@ -110,16 +111,50 @@ model Client {
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
-  sessions    Session[]
-  transcripts Transcript[]
-  timeEntries TimeEntry[]
-  invoices    Invoice[]
-  prepBriefs  PrepBrief[]
+  sessions     Session[]
+  transcripts  Transcript[]
+  timeEntries  TimeEntry[]
+  invoices     Invoice[]
+  prepBriefs   PrepBrief[]
+  billingGroup BillingGroup? @relation(fields: [billingGroupId], references: [id])
 
   @@index([status])
   @@index([email])
   @@index([nextInvoiceDueAt])
+  @@index([billingGroupId])
   @@map("clients")
+}
+
+model BillingGroup {
+  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String
+  displayName         String?
+  billingContactName  String?
+  billingContactEmail String
+  ccEmails            String[]       @default([])
+  address             Json?
+  // Optional override. When null, each line item bills at the member's own
+  // hourlyRate captured on the TimeEntry at session time.
+  hourlyRate          Decimal?       @db.Decimal(10, 2)
+  billingCadence      BillingCadence @default(MONTHLY)
+  customCadenceDays   Int?
+  billingPausedUntil  DateTime?
+  nextInvoiceDueAt    DateTime?
+  billingTimezone     String?
+  retainer            Decimal        @default(0) @db.Decimal(10, 2)
+  stripeCustomerId    String?
+  status              ClientStatus   @default(ACTIVE)
+  notes               String?
+  tags                String[]       @default([])
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  members  Client[]
+  invoices Invoice[]
+
+  @@index([status])
+  @@index([nextInvoiceDueAt])
+  @@map("billing_groups")
 }
 
 model Session {
@@ -198,7 +233,10 @@ model TimeEntry {
 
 model Invoice {
   id                      String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  clientId                String        @db.Uuid
+  // Exactly one of clientId / groupId is set. Enforced via DB CHECK constraint
+  // `invoice_billable_xor` added in the billing-groups migration.
+  clientId                String?       @db.Uuid
+  groupId                 String?       @db.Uuid
   invoiceNumber           String        @unique
   periodStart             DateTime
   periodEnd               DateTime
@@ -212,7 +250,7 @@ model Invoice {
   sentAt                  DateTime?
   paidAt                  DateTime?
   notes                   String?
-  // Snapshot fields: populated at DRAFT creation, frozen until "Refresh from client" is clicked.
+  // Snapshot fields: populated at DRAFT creation, frozen until "Refresh from billable" is clicked.
   // Existing rows backfilled from current client values in the same migration.
   snapshotClientName      String?
   snapshotBillingEmail    String?
@@ -222,11 +260,13 @@ model Invoice {
   lastReminderSentAt      DateTime?
   createdAt               DateTime      @default(now())
 
-  client      Client              @relation(fields: [clientId], references: [id])
+  client      Client?             @relation(fields: [clientId], references: [id])
+  group       BillingGroup?       @relation(fields: [groupId], references: [id])
   timeEntries TimeEntry[]
   adjustments InvoiceAdjustment[]
 
   @@index([clientId])
+  @@index([groupId])
   @@index([status])
   @@map("invoices")
 }
@@ -247,14 +287,16 @@ model InvoiceAdjustment {
 
 model BillingAuditLog {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  event     String // INVOICE_DRAFT | INVOICE_APPROVED | INVOICE_SENT | INVOICE_PAID | INVOICE_VOID | RESET | RETAINER_ADD | RETAINER_APPLY | MANUAL_EDIT | CRON_GEN | MANUAL_GEN | CADENCE_CHANGE
+  event     String // INVOICE_DRAFT | INVOICE_APPROVED | INVOICE_SENT | INVOICE_PAID | INVOICE_VOID | RESET | RETAINER_ADD | RETAINER_APPLY | MANUAL_EDIT | CRON_GEN | MANUAL_GEN | CADENCE_CHANGE | GROUP_CREATED | GROUP_UPDATED | GROUP_DELETED | GROUP_MEMBER_ADDED | GROUP_MEMBER_REMOVED
   actor     String? // Clerk user id (null = system/cron)
   clientId  String?  @db.Uuid
+  groupId   String?  @db.Uuid
   invoiceId String?  @db.Uuid
   payload   Json?
   createdAt DateTime @default(now())
 
   @@index([clientId, createdAt(sort: Desc)])
+  @@index([groupId, createdAt(sort: Desc)])
   @@index([invoiceId])
   @@index([event, createdAt(sort: Desc)])
   @@map("billing_audit_logs")
