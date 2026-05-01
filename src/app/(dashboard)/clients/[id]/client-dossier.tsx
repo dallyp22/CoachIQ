@@ -42,11 +42,24 @@ interface ClientData {
   notebookId: string | null;
   driveFolderId: string | null;
   sessions: Session[];
+  billingGroup: { id: string; name: string; displayName: string | null } | null;
+}
+
+interface AvailableGroup {
+  id: string;
+  name: string;
+  displayName: string | null;
 }
 
 type DossierTab = "overview" | "sessions" | "intelligence" | "billing";
 
-export function ClientDossier({ client }: { client: ClientData }) {
+export function ClientDossier({
+  client,
+  availableGroups,
+}: {
+  client: ClientData;
+  availableGroups: AvailableGroup[];
+}) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -391,7 +404,9 @@ export function ClientDossier({ client }: { client: ClientData }) {
               billingPausedUntil: client.billingPausedUntil,
               billingNotes: client.billingNotes,
               retainer: client.retainer,
+              billingGroup: client.billingGroup,
             }}
+            availableGroups={availableGroups}
           />
         </div>
       )}

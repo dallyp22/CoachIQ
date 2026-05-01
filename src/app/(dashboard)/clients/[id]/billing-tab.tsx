@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 interface BillingClient {
@@ -17,6 +18,13 @@ interface BillingClient {
   billingPausedUntil: string | null;
   billingNotes: string | null;
   retainer: number;
+  billingGroup: { id: string; name: string; displayName: string | null } | null;
+}
+
+interface AvailableGroup {
+  id: string;
+  name: string;
+  displayName: string | null;
 }
 
 interface Preview {
@@ -46,8 +54,15 @@ const cadenceLabels: Record<BillingClient["billingCadence"], string> = {
  *   3. Retainer strip
  *   4. Notes textarea
  */
-export function BillingTab({ client }: { client: BillingClient }) {
+export function BillingTab({
+  client,
+  availableGroups,
+}: {
+  client: BillingClient;
+  availableGroups: AvailableGroup[];
+}) {
   const router = useRouter();
+  const inGroup = client.billingGroup !== null;
   const [form, setForm] = useState({
     displayName: client.displayName ?? "",
     billingContactName: client.billingContactName ?? "",
@@ -202,6 +217,28 @@ export function BillingTab({ client }: { client: BillingClient }) {
         previewDateStr={previewDateStr}
         clientId={client.id}
       />
+
+      {/* Billing group banner + picker */}
+      <BillingGroupSection
+        clientId={client.id}
+        currentGroup={client.billingGroup}
+        availableGroups={availableGroups}
+      />
+
+      {inGroup && (
+        <div className="bg-accent-light/30 border border-accent/20 text-foreground text-sm rounded-[var(--radius-md)] p-4">
+          This client is billed via{" "}
+          <Link
+            href={`/billing-groups/${client.billingGroup!.id}`}
+            className="font-medium text-accent hover:underline"
+          >
+            {client.billingGroup!.displayName ?? client.billingGroup!.name}
+          </Link>
+          . Cadence, billing contact, retainer, and Stripe customer are managed
+          on the group. Per-session hours and rate below still drive what shows
+          up on the group's invoice for this person.
+        </div>
+      )}
 
       {/* 2. Cadence + Identity grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -516,6 +553,90 @@ function CcEmailChips({
         placeholder={emails.length === 0 ? "Type email + Enter to add" : ""}
         className="flex-1 min-w-[180px] bg-transparent text-sm font-mono outline-none px-1"
       />
+    </div>
+  );
+}
+
+function BillingGroupSection({
+  clientId,
+  currentGroup,
+  availableGroups,
+}: {
+  clientId: string;
+  currentGroup: { id: string; name: string; displayName: string | null } | null;
+  availableGroups: AvailableGroup[];
+}) {
+  const router = useRouter();
+  const [updating, setUpdating] = useState(false);
+
+  async function assignGroup(groupId: string) {
+    setUpdating(true);
+    try {
+      const resp = await fetch(`/api/billing-groups/${groupId}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId }),
+      });
+      if (resp.ok) router.refresh();
+      else alert("Failed to assign to group");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  async function removeFromGroup() {
+    if (!currentGroup) return;
+    if (!confirm(`Move ${currentGroup.displayName ?? currentGroup.name} back to solo billing?`)) return;
+    setUpdating(true);
+    try {
+      const resp = await fetch(`/api/billing-groups/${currentGroup.id}/members`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId }),
+      });
+      if (resp.ok) router.refresh();
+      else alert("Failed to remove from group");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  if (currentGroup) {
+    return (
+      <div className="flex items-center justify-end">
+        <button
+          onClick={removeFromGroup}
+          disabled={updating}
+          className="text-xs text-muted hover:text-error transition-colors disabled:opacity-50"
+        >
+          Move back to solo billing
+        </button>
+      </div>
+    );
+  }
+
+  if (availableGroups.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="flex items-center gap-2 justify-end">
+      <span className="text-xs text-muted">Bill via group:</span>
+      <select
+        defaultValue=""
+        onChange={(e) => {
+          if (e.target.value) assignGroup(e.target.value);
+        }}
+        disabled={updating}
+        className="bg-background border border-border rounded px-2 py-1 text-xs outline-none focus:border-accent disabled:opacity-50"
+      >
+        <option value="">— Solo —</option>
+        {availableGroups.map((g) => (
+          <option key={g.id} value={g.id}>
+            {g.displayName ?? g.name}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

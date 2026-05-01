@@ -16,10 +16,18 @@ export default async function ClientDossierPage({
         orderBy: { date: "desc" },
         take: 20,
       },
+      billingGroup: { select: { id: true, name: true, displayName: true } },
     },
   });
 
   if (!client) notFound();
+
+  // Active groups list for the picker (cheap; small set).
+  const groups = await prisma.billingGroup.findMany({
+    where: { status: "ACTIVE" },
+    select: { id: true, name: true, displayName: true },
+    orderBy: { name: "asc" },
+  });
 
   return (
     <ClientDossier
@@ -59,7 +67,9 @@ export default async function ClientDossierPage({
           synopsis: s.synopsis,
           sessionSource: s.sessionSource,
         })),
+        billingGroup: client.billingGroup,
       }}
+      availableGroups={groups}
     />
   );
 }
