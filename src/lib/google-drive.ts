@@ -107,6 +107,16 @@ async function findOrCreateFolder(
 
 async function getRootFolderId(): Promise<string> {
   if (_rootFolderId) return _rootFolderId;
+
+  // Prefer a pinned ID. Drive's search index is eventually consistent, so
+  // looking up by name from a cold serverless function can miss an existing
+  // folder and create a duplicate. A pinned ID skips the search entirely.
+  const pinned = process.env.COACHIQ_DRIVE_ROOT_FOLDER_ID?.trim();
+  if (pinned) {
+    _rootFolderId = pinned;
+    return _rootFolderId;
+  }
+
   _rootFolderId = await findOrCreateFolder(ROOT_FOLDER_NAME, null);
   return _rootFolderId;
 }
