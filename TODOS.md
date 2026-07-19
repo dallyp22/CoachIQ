@@ -83,6 +83,97 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 **Depends on:** Billing overhaul Phase 1 (parentInvoiceId field).
 **Added:** 2026-04-16 via /plan-eng-review (billing overhaul)
 
+## Cron / Compute Follow-ups (post twice-daily consolidation)
+
+### Build the daily-brief pre-warm properly (start-of-day cron now UNSCHEDULED)
+**Priority:** P1
+**What:** Confirmed broken: `start-of-day` fetched Clerk-protected `/api/daily-brief`, got redirected to sign-in, and 500'd on every run — and nothing persisted the result anyway (the "cached and ready" comment described machinery that never existed). As of v0.1.1.0 the cron is removed from `vercel.json` (route file kept, documented as unscheduled). The dashboard still generates the brief on open, same as before.
+**Fix path:** Add a `DailyBrief` table keyed by date; either accept CRON_SECRET auth on the daily-brief route (add it to `src/middleware.ts` public routes) or extract brief generation into a lib and call it inline from a re-scheduled cron; have the dashboard read today's row and only regenerate on explicit refresh. Re-add the cron to vercel.json once this works.
+**Why:** Wasted LLM spend on every dashboard open; the pre-generation feature Todd was promised has never fired.
+**Added:** 2026-07-06 via /ship; updated 2026-07-15 (cron unscheduled).
+
+### Paginate calendar sync — the 96h window can silently drop billable sessions
+**Priority:** P1
+**What:** `syncCalendarSessions` (`src/lib/calendar-sync.ts`) fetches a single page (`maxResults: 250`) with no `nextPageToken` loop. This branch widened its window to 96h (72h lookback + 24h ahead). A busy/shared calendar over a long weekend can exceed one page; overflow events are silently dropped — the Sessions and **UNBILLED TimeEntries never get created**, i.e. silent revenue under-capture with nothing in `result.errors`. (Brief delivery got a truncation guard this round; calendar-sync did not.)
+**Fix path:** Paginate via `nextPageToken` (reuse `fetchEvents` in the same file), or at minimum push a truncation error into `result.errors` when `nextPageToken` is set.
+**Added:** 2026-07-15 via /ship (adversarial + red-team review).
+
+### Validate coachingTitleFilter regex at save time
+**Priority:** P1
+**What:** `filterCoachingEvents` builds `new RegExp(coachingTitleFilter, "i")` from the DB-stored, user-editable setting. An invalid pattern throws synchronously inside BOTH workday-sync steps, failing the whole consolidated cron (500) for a full day until the next run. Under the old 15-min crons the blast radius of a bad setting was one tick; now it's a workday.
+**Fix path:** Validate/compile the pattern when it's saved in the Settings API, and wrap the runtime `RegExp` construction in try/catch that falls back to the default filter while surfacing a per-run warning.
+**Added:** 2026-07-15 via /ship (red-team review).
+
+### Batch the per-event N+1 dedup queries
+**Priority:** P2
+**What:** Two hot-path N+1s now amplified by the wider window: `calendar-sync.ts` awaits `session.findUnique({ where: { calendarEventId } })` per event, and `deliver-briefs.ts` awaits `prepBrief.findFirst` per event. Each is a sequential Neon round-trip that extends the cron's awake time (working against the whole point of this consolidation). `calendar-sync` also re-fetches a just-created row with `findUnique` inside the transaction instead of using `create`'s return value.
+**Fix path:** Batch-load existing `calendarEventId`s / briefs for the window into a Set/Map before the loop; use `tx.session.create`'s return value.
+**Added:** 2026-07-15 via /ship (performance review).
+
+### Time budget should be a deadline from request start, not a per-lib clock
+**Priority:** P2
+**What:** `deliver-briefs.ts` starts its 240s `TIME_BUDGET_MS` at its own entry, but calendar sync runs first (unbudgeted) under the shared `maxDuration = 300`. On a slow Monday backlog, sync + 240s of briefs can exceed 300s and Vercel kills the function mid-LLM-call — losing the JSON response and the "deferred to next run" error, the exact silent failure the budget was meant to prevent.
+**Fix path:** Compute a deadline (`requestStart + maxDuration*1000 - safetyMargin`) in the route and pass it into `deliverDueBriefs`; size the margin to one worst-case LLM call (~60-90s) so no brief starts unless it can finish.
+**Added:** 2026-07-15 via /ship (performance + adversarial review).
+
+### invoice-generation at 12:05 can race the 12:00 backlog sync
+**Priority:** P2
+**What:** `vercel.json` fires invoice-generation at 12:05; on a heavy Monday, workday-sync (12:00) may still be mid-sync. `generateForAllDueClients` snapshots UNBILLED time entries at run time, so weekend entries created after the snapshot miss this cycle and drift to the next invoice — silently light invoices on the morning with the most new entries.
+**Fix path:** Move invoice generation later (e.g. 12:15+), or run it as a step inside workday-sync after sync completes.
+**Added:** 2026-07-15 via /ship (adversarial review).
+
+### Cron alerting: total brief failure reads as HTTP 200 "partial" forever
+**Priority:** P2
+**What:** workday-sync returns 500 only when BOTH steps throw. A revoked LLM key makes every brief fail every run while sync succeeds → 200 `"partial"` indefinitely, so status-code-based cron monitoring (Vercel's default) never fires; detection depends on someone reading the `errors` array. Decide whether anything actually consumes that array.
+**Fix path:** Add alerting that inspects the `errors`/`failed` fields (e.g. wire the existing SMTP alert vars), or return a non-2xx when a whole step fails N runs in a row.
+**Added:** 2026-07-15 via /ship (adversarial review, investigate).
+
+### Persist a sync high-water-mark so missed runs can't permanently lose billable sessions
+**Priority:** P1
+**What:** Vercel crons never retry. If consecutive workday-sync failures (broken env var, paused project, long-weekend outage) bridge an event's exit from the rolling 72h lookback, its Session and UNBILLED TimeEntry are never created — silent, permanent, billable loss with no record it was missed. There is no reconciliation or "last successful sync at T" marker letting the next healthy run stretch its lookback to cover the actual gap.
+**Fix path:** Persist a last-successful-sync timestamp (CoachSettings or a small SyncState row); each run uses `max(72h, now - lastSuccess + slack)` as lookback and updates the marker only on success.
+**Added:** 2026-07-19 via /ship (adversarial review).
+
+### 72h sync lookback resurrects deleted sessions and can double-bill
+**Priority:** P2
+**What:** Calendar-sync dedup is solely "does a Session with this calendarEventId exist." If Todd deletes a mis-matched or non-billable synced session, the next run recreates it — fresh UNBILLED TimeEntry + sessionCount increment — as long as the event is inside the rolling 72h window. If the original entry was already invoiced, the client can be billed twice. Existed at 24h; the 72h window triples the exposure and guarantees Monday resurrection of Friday cleanup.
+**Fix path:** Tombstone dismissed calendarEventIds (small table or a soft-delete flag on Session) and have sync skip tombstoned IDs.
+**Added:** 2026-07-19 via /ship (adversarial review).
+
+### Unify the workday-sync step gates (calendar off ≠ healthy quiet day)
+**Priority:** P2
+**What:** `syncCalendarSessions` gates on `settings.calendarSyncEnabled` but never checks `hasCalendarCredentials`; `deliverDueBriefs` checks `googleCalendarId` + credentials but ignores `calendarSyncEnabled`. Toggling calendar sync OFF in Settings still burns LLM spend on briefs twice a day, and a disabled/unconfigured sync returns an empty `SyncResult` that workday-sync reports as a clean "completed" run — misconfiguration is indistinguishable from a quiet day. Adversarial review sharpened the second half: the missing `{status:"skipped", reason}` in `SyncResult` is a response-contract defect on its own — silently stopped session creation means silently stopped billing.
+**Fix path:** Gate both steps on the same predicate (calendarSyncEnabled AND calendar configured) and have `syncCalendarSessions` return an explicit `{status:"skipped", reason}` like `deliverDueBriefs` does.
+**Added:** 2026-07-19 via /ship (red-team + adversarial review).
+
+### Add a timeout to the prep-brief LLM fetch
+**Priority:** P2
+**What:** `generatePrepBrief`'s fetch to the chat provider (`src/lib/prep-brief.ts`) passes no AbortSignal, so one hung connection sails past deliver-briefs' 240s budget (which only checks between events) to the 300s maxDuration kill — losing the whole JSON response including the errors array.
+**Fix path:** `AbortSignal.timeout(60_000)` on the provider fetch so a hung call becomes a caught per-brief error instead of a function kill.
+**Added:** 2026-07-19 via /ship (red-team review).
+
+### Share the settings/clients load between workday-sync steps
+**Priority:** P2
+**What:** Each workday-sync step independently re-queries `coachSettings.findFirst` and a near-identical non-CHURNED `client.findMany` from Neon (calendar-sync.ts:28/50 and deliver-briefs.ts). Two redundant round-trips per tick in the cron whose whole purpose is minimizing Neon compute. Fold into the "Batch the per-event N+1 dedup queries" work.
+**Fix path:** Optional settings/clients params on both libs (or a shared loader), fetched once in the route; share the email→client Map construction.
+**Added:** 2026-07-19 via /ship (performance review).
+
+### Extract a shared cron test-env helper + dedicated cron-auth tests
+**Priority:** P3
+**What:** CRON_SECRET/VERCEL env save-restore, `makeRequest`, and the fail-closed 503 test are duplicated across all three cron route test files in two divergent patterns; `verifyCronSecret` has no dedicated `tests/lib/cron-auth.test.ts` and is re-verified through each route.
+**Fix path:** `tests/helpers/cron-env.ts` (makeCronRequest + withCronEnv snapshot/restore), a direct cron-auth test for the 401/503/local-dev matrix, one thin wiring assertion per route file.
+**Added:** 2026-07-19 via /ship (maintainability review).
+
+### briefDeliveryMinutes is now a dead knob below 6.5h
+**What:** `deliverDueBriefs` uses `max(briefDeliveryMinutes, 390)` so any realistic setting (5–120 min) has no effect, but the Settings UI still presents it as "minutes before session." Also, 0 does not disable auto-delivery (it falls back to 30 via `|| 30`).
+**Fix path:** Either remove/relabel the setting (delivery timing is schedule-driven now) or honor 0/null as "auto-delivery off" with an early return.
+**Added:** 2026-07-06 via /ship (adversarial review, finding 4)
+
+### PrepBrief dedup: match on calendar event ID + unique constraint
+**What:** Dedup is a ±1h check-then-act on `(clientId, targetSessionDate)` with no unique constraint — concurrent manual-button + cron runs can double-generate, and back-to-back sessions under 1h apart for the same client suppress the second brief. 2026-07-19 adversarial review added: a session rescheduled by under 1h after its brief generated gets no fresh brief and the old brief keeps the wrong `targetSessionDate`; and `generatePrepBrief` stamps every cron brief `delivered: true` even for later-cancelled or already-started sessions, so the delivered flag is unreliable.
+**Fix path:** Store the calendar event ID on PrepBrief, dedup on it, and add a unique constraint (mirrors the Session.calendarEventId pattern); regenerate on event-time change; set delivered only when the brief is actually surfaced.
+**Added:** 2026-07-06 via /ship (adversarial review, finding 10); expanded 2026-07-19.
+
 ## Phase 4 Bugs
 
 ### NLM retry_failed.py is broken
@@ -90,3 +181,7 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 **Why:** This means NLM injection failures are never recovered. In v3, the NLM worker moves to a Fly.io container and retries against PostgreSQL, so the fix looks different, but the bug should be addressed during the Phase 4 NLM worker rebuild.
 **Depends on:** Phase 4 NLM worker migration.
 **Added:** 2026-03-28 via /plan-eng-review
+
+## Completed
+
+(Ship moves finished items here with their completion version.)
