@@ -89,7 +89,7 @@ With CoachIQ, you type "which clients have talked about leaving their role" and 
 
 **No data sharing:** CoachIQ does not share your data with anyone. AI features send transcript excerpts to OpenAI for processing (synopses, search, embeddings), but OpenAI's API terms state they do not train on API inputs. When you switch to your own API keys, the data flows through your own OpenAI account.
 
-**Access control:** All dashboard routes require authentication. Webhook endpoints (Fathom, Stripe) are the only public endpoints, and they verify cryptographic signatures before processing any data.
+**Access control:** All dashboard routes require authentication. The only public endpoints are the webhooks (Fathom, Stripe), which verify cryptographic signatures before processing any data, and the scheduled cron endpoints, which require a secret token and shut themselves off entirely if that token is ever missing in production.
 
 **Sensitive data handling:**
 - `.env` file with secrets is gitignored (never committed to source control)
