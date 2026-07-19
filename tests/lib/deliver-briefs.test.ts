@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   coachSettingsFindFirst: vi.fn(),
@@ -85,6 +85,12 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
+afterEach(() => {
+  // Restores spied implementations (console.error, and Date.now in the
+  // time-budget test) so no test leaks a fake clock into the next one.
+  vi.restoreAllMocks();
+});
+
 describe("deliverDueBriefs — configuration guards", () => {
   it("skips when no coach settings row exists", async () => {
     arrange({ settings: null });
@@ -109,14 +115,33 @@ describe("deliverDueBriefs — configuration guards", () => {
 });
 
 describe("deliverDueBriefs — lookahead window", () => {
-  it("floors the window at 6.5h when briefDeliveryMinutes is small", async () => {
+  it("floors the lookahead at 6.5h and looks back 1h for failed-run recovery", async () => {
+    const before = Date.now();
     arrange({ settings: { ...baseSettings, briefDeliveryMinutes: 30 } });
     await deliverDueBriefs();
     const args = mocks.eventsList.mock.calls[0][0];
     const windowMs =
       new Date(args.timeMax).getTime() - new Date(args.timeMin).getTime();
-    expect(windowMs).toBe((6 * 60 + 30) * 60 * 1000);
+    // 1h recovery lookback + 6.5h cron-gap lookahead
+    expect(windowMs).toBe((60 + 6 * 60 + 30) * 60 * 1000);
+    // Direction: timeMin sits ~1h in the past, not the future
+    const lookbackMs = before - new Date(args.timeMin).getTime();
+    expect(lookbackMs).toBeGreaterThanOrEqual(60 * 60 * 1000 - 5000);
+    expect(lookbackMs).toBeLessThanOrEqual(60 * 60 * 1000 + 5000);
     expect(args.calendarId).toBe("cal-1");
+    // Without the cap the Google default (250) applies and the truncation
+    // warning below becomes unreachable in practice.
+    expect(args.maxResults).toBe(25);
+  });
+
+  it("passes the raw event list and the coaching title filter to filterCoachingEvents", async () => {
+    const events = [makeEvent({ attendees: [{ email: clientA.email }] })];
+    arrange({ events });
+    await deliverDueBriefs();
+    expect(mocks.filterCoachingEvents).toHaveBeenCalledWith(
+      events,
+      baseSettings.coachingTitleFilter
+    );
   });
 
   it("uses briefDeliveryMinutes when it exceeds the 6.5h floor", async () => {
@@ -128,7 +153,29 @@ describe("deliverDueBriefs — lookahead window", () => {
     const args = mocks.eventsList.mock.calls[0][0];
     const windowMs =
       new Date(args.timeMax).getTime() - new Date(args.timeMin).getTime();
-    expect(windowMs).toBe(600 * 60 * 1000);
+    // 1h recovery lookback + the 600-minute custom lookahead
+    expect(windowMs).toBe((60 + 600) * 60 * 1000);
+  });
+
+  it("re-covers a recently started session (failed prior run) but skips stale ones", async () => {
+    // timeMin filters on event END, so a session that started long ago can
+    // still appear in the response; only starts within the 1h lookback get
+    // a brief.
+    const startedRecently = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const startedStale = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    arrange({
+      events: [
+        makeEvent({ startISO: startedRecently, attendees: [{ email: clientA.email }] }),
+        makeEvent({ startISO: startedStale, attendees: [{ email: clientA.email }] }),
+      ],
+    });
+    const result = await deliverDueBriefs();
+    expect(result).toEqual({ status: "completed", generated: 1, skipped: 1, failed: 0, errors: [] });
+    expect(mocks.generatePrepBrief).toHaveBeenCalledTimes(1);
+    expect(mocks.generatePrepBrief).toHaveBeenCalledWith(
+      "client-a",
+      new Date(startedRecently)
+    );
   });
 });
 
@@ -145,14 +192,16 @@ describe("deliverDueBriefs — client matching", () => {
     expect(mocks.generatePrepBrief).not.toHaveBeenCalled();
   });
 
-  it("skips matched clients with sessionCount 0 (no history to brief on)", async () => {
+  it("briefs a matched client even if the denormalized sessionCount drifted to 0", async () => {
+    // The client query already requires a synopsis-bearing session — the
+    // real generatePrepBrief precondition. The counter must not gate briefs.
     arrange({
       clients: [{ ...clientA, sessionCount: 0 }],
       events: [makeEvent({ attendees: [{ email: clientA.email }] })],
     });
     const result = await deliverDueBriefs();
-    expect(result).toEqual({ status: "completed", generated: 0, skipped: 1, failed: 0, errors: [] });
-    expect(mocks.generatePrepBrief).not.toHaveBeenCalled();
+    expect(result).toEqual({ status: "completed", generated: 1, skipped: 0, failed: 0, errors: [] });
+    expect(mocks.generatePrepBrief).toHaveBeenCalledTimes(1);
   });
 
   it("matches a client via a secondary email (case-insensitive, coachEmail unset)", async () => {
@@ -252,5 +301,97 @@ describe("deliverDueBriefs — dedup and generation", () => {
       errors: ["brief for client client-a: LLM unavailable"],
     });
     expect(mocks.generatePrepBrief).toHaveBeenCalledTimes(2);
+  });
+
+  it("normalizes a non-Error throw from generatePrepBrief to Unknown error", async () => {
+    arrange({
+      events: [makeEvent({ attendees: [{ email: clientA.email }] })],
+    });
+    mocks.generatePrepBrief.mockRejectedValueOnce("string rejection");
+
+    const result = await deliverDueBriefs();
+    expect(result).toEqual({
+      status: "completed",
+      generated: 0,
+      skipped: 0,
+      failed: 1,
+      errors: ["brief for client client-a: Unknown error"],
+    });
+  });
+});
+
+describe("deliverDueBriefs — client eligibility query", () => {
+  it("only loads non-churned clients that have at least one synopsis-bearing session", async () => {
+    arrange({ events: [] });
+    await deliverDueBriefs();
+    expect(mocks.clientFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          status: { not: "CHURNED" },
+          sessions: { some: { synopsis: { not: null } } },
+        },
+      })
+    );
+  });
+});
+
+describe("deliverDueBriefs — limits and fallbacks", () => {
+  it("falls back to a 30-minute floor input when briefDeliveryMinutes is null (window = 6.5h cap gap)", async () => {
+    arrange({ settings: { ...baseSettings, briefDeliveryMinutes: null } });
+    await deliverDueBriefs();
+    const args = mocks.eventsList.mock.calls[0][0];
+    const windowMs =
+      new Date(args.timeMax).getTime() - new Date(args.timeMin).getTime();
+    // 1h recovery lookback + max(30, 390) = the 6.5h cron-gap lookahead
+    expect(windowMs).toBe((60 + 6 * 60 + 30) * 60 * 1000);
+  });
+
+  it("warns when the calendar reports more events beyond the 25-event cap (nextPageToken)", async () => {
+    const events = Array.from({ length: 25 }, () =>
+      makeEvent({ attendees: [{ email: "stranger@nowhere.com" }] })
+    );
+    arrange({ events });
+    mocks.eventsList.mockResolvedValue({
+      data: { items: events, nextPageToken: "next-page" },
+    });
+    const result = await deliverDueBriefs();
+    expect(result.status).toBe("completed");
+    expect(result.skipped).toBe(25);
+    expect(result.errors).toEqual([
+      "calendar window exceeded the 25-event cap — later sessions in the window may be missing briefs",
+    ]);
+  });
+
+  it("does not warn when a page is exactly at the cap with no further pages", async () => {
+    const events = Array.from({ length: 25 }, () =>
+      makeEvent({ attendees: [{ email: "stranger@nowhere.com" }] })
+    );
+    arrange({ events });
+    const result = await deliverDueBriefs();
+    expect(result.errors).toEqual([]);
+  });
+
+  it("stops generating when the time budget is exhausted and reports the deferral", async () => {
+    const startISO = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    arrange({
+      events: [
+        makeEvent({ startISO, attendees: [{ email: clientA.email }] }),
+        makeEvent({ startISO, attendees: [{ email: clientA.email }] }),
+      ],
+    });
+    // Date.now() call order inside deliverDueBriefs: startedAt, then one
+    // budget check per loop iteration. Let iteration 1 pass and iteration 2
+    // land past the 240s budget. (Events were created above, before the spy.)
+    const nowValues = [1_000, 1_000, 1_000 + 240_001];
+    vi.spyOn(Date, "now").mockImplementation(
+      () => nowValues.shift() ?? 1_000 + 240_001
+    );
+
+    const result = await deliverDueBriefs();
+    expect(result.generated).toBe(1);
+    expect(mocks.generatePrepBrief).toHaveBeenCalledTimes(1);
+    expect(result.errors).toEqual([
+      "time budget exhausted after 1 briefs — sessions starting before the next run need the manual Generate Brief button; later ones are picked up next run",
+    ]);
   });
 });

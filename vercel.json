@@ -2,20 +2,12 @@
   "framework": "nextjs",
   "crons": [
     {
-      "path": "/api/cron/calendar-sync",
-      "schedule": "*/15 12-23 * * 1-5"
-    },
-    {
-      "path": "/api/cron/deliver-briefs",
-      "schedule": "*/15 12-23 * * 1-5"
-    },
-    {
-      "path": "/api/cron/start-of-day",
-      "schedule": "0 13 * * 1-5"
+      "path": "/api/cron/workday-sync",
+      "schedule": "0 12,18 * * 1-5"
     },
     {
       "path": "/api/cron/invoice-generation",
-      "schedule": "0 13 * * *"
+      "schedule": "5 12 * * 1-5"
     }
   ]
 }

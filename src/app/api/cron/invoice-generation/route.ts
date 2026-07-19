@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateForAllDueClients } from "@/lib/billing/generate";
+import { verifyCronSecret } from "@/lib/cron-auth";
 
 /**
  * GET /api/cron/invoice-generation
  *
- * Daily cron (vercel.json: "0 13 * * *" = 7am CT in winter / 8am DT in summer).
+ * Weekday cron (vercel.json: "5 12 * * 1-5" = 7:05am CDT / 6:05am CST —
+ * inside the workday-sync Neon wake window). Weekdays-only on purpose:
+ * calendar sync doesn't run on weekends, so a Sat/Sun run would invoice
+ * against up to 66h of unsynced Friday sessions. Clients due on a weekend
+ * are picked up Monday 12:05, right after the backlog sync.
  * Iterates active clients, generates draft (or APPROVED if under threshold)
  * invoices for any whose nextInvoiceDueAt has elapsed.
  *
@@ -12,14 +17,12 @@ import { generateForAllDueClients } from "@/lib/billing/generate";
  * the manual "Generate Draft Invoices" button in /api/invoices/generate.
  *
  * Cron-header auth: Vercel sets Authorization: Bearer ${CRON_SECRET} on
- * scheduled invocations. Returns 401 otherwise (when CRON_SECRET is set).
+ * scheduled invocations. Wrong/missing token returns 401; a missing
+ * CRON_SECRET fails closed with 503 on Vercel (open in local dev).
  */
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const unauthorized = verifyCronSecret(request);
+  if (unauthorized) return unauthorized;
 
   const startedAt = new Date();
   try {
