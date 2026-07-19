@@ -25,5 +25,5 @@ Key routing rules:
 - Design system, brand → invoke design-consultation
 - Visual audit, design polish → invoke design-review
 - Architecture review → invoke plan-eng-review
-- Save progress, checkpoint, resume → invoke checkpoint
+- Save progress, checkpoint → invoke context-save; resume → invoke context-restore
 - Code quality, health check → invoke health
