@@ -133,3 +133,4 @@ OpenAI does not store or train on data sent via their API. When you input your o
 4. **Set up Stripe** when you're ready to send invoices (add your Stripe key in Settings)
 
 That's it. Everything else is automatic.
+

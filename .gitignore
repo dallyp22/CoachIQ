@@ -11,6 +11,12 @@ data/
 test_transcripts/
 backfill_transcripts/
 
+# Client dossiers — confidential coaching material, never commit
+dossiers/
+
+# Build artifacts
+tsconfig.tsbuildinfo
+
 # Python
 __pycache__/
 *.pyc
