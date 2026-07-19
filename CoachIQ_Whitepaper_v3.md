@@ -25,7 +25,7 @@ The core architectural insight: coaching conversations are an undervalued data a
 | Monthly operational cost | ~$25–35 |
 | Total codebase | ~25,800 lines TypeScript |
 | API endpoints | 22+ |
-| Scheduled automations | 3 cron jobs |
+| Scheduled automations | 2 cron jobs |
 
 ---
 
@@ -166,7 +166,7 @@ The entire pipeline executes in under 60 seconds with zero manual intervention. 
 - **Patterns to Watch** — Recurring themes across recent sessions (e.g., "delegation anxiety keeps surfacing")
 - **Suggested Focus Areas** — Specific topics and questions for the upcoming session
 
-Prep briefs are generated automatically via cron (5-minute intervals within a configurable delivery window) or on-demand from the client dossier. Generation time: ~5 seconds.
+Prep briefs are pre-generated automatically by the twice-daily workday-sync cron — each run covers every session in the upcoming half-day window — or on-demand from the client dossier. Generation time: ~5 seconds.
 
 **Daily Briefings** — A "Generate Day Brief" button on the dashboard produces an AI overview of the entire coaching day: full schedule with client context, per-client talking points, expected billable hours, and back-to-back session warnings.
 
@@ -217,9 +217,8 @@ CoachIQ reads the coach's Google Calendar as a one-way data source (calendar →
 **Fathom-Calendar Cross-Linking** — The calendar sync links past calendar events to existing Fathom sessions by matching the client attendee email within a 2-hour time window, creating a unified timeline.
 
 **Scheduled Automation:**
-- Calendar sync cron: every 15 minutes
-- Prep brief delivery cron: every 5 minutes (within configurable window)
-- Start-of-day brief cron: 7 AM CT weekdays
+- Workday-sync cron: twice per weekday (12:00 and 18:00 UTC — 7 AM / 1 PM CT), running calendar sync (72-hour lookback) and prep-brief pre-generation in a single run so the Neon database can sleep between runs
+- Invoice generation cron: 12:05 UTC weekdays, immediately after calendar sync lands in the same database wake window
 
 ### 4.6 Billing Automation
 

@@ -1,25 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyCronSecret } from "@/lib/cron-auth";
 
 /**
- * GET /api/cron/start-of-day — pre-generate the daily brief at 7 AM CT.
- * Calls /api/daily-brief so it's cached and ready when Todd opens the dashboard.
+ * GET /api/cron/start-of-day — intended to pre-generate the daily brief at
+ * the start of the workday.
+ *
+ * CURRENTLY UNSCHEDULED (removed from vercel.json): /api/daily-brief is
+ * Clerk-protected, so this route's server-to-server fetch has always been
+ * redirected to sign-in and failed — and there is no cache for a pre-warm
+ * to fill anyway. Re-schedule only after daily-brief gets cron auth and a
+ * real cache (see TODOS.md "Daily-brief pre-warm").
  */
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const unauthorized = verifyCronSecret(request);
+  if (unauthorized) return unauthorized;
 
   try {
-    // Trigger daily brief generation
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : "http://localhost:3000";
+    // Trigger daily brief generation. NEXT_PUBLIC_APP_URL wins when set
+    // (it's a full URL); otherwise fall back to the deployment URL.
+    // || (not ??) so a set-but-empty env var — a common `vercel env pull`
+    // artifact — falls through instead of producing an unparseable "" URL.
+    const baseUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : "http://localhost:3000");
 
-    const resp = await fetch(`${baseUrl}/api/daily-brief?force=true`, {
-      headers: request.headers,
-    });
+    // No headers forwarded: daily-brief never reads cron auth, so sending
+    // Bearer ${CRON_SECRET} to whatever host baseUrl resolves to was pure
+    // leak surface with zero function.
+    const resp = await fetch(`${baseUrl}/api/daily-brief?force=true`);
 
     const data = await resp.json();
 
