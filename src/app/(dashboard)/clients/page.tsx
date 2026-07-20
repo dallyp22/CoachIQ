@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import Link from "next/link";
 import { requireCoachPage } from "@/lib/authz-page";
 import { scopeCoachId, clientWhere } from "@/lib/authz";
+import { AddClientButton } from "./add-client";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,9 @@ export default async function ClientsPage() {
             {activeCount} active of {clients.length} total
           </p>
         </div>
+        <AddClientButton
+          defaultRate={coach.defaultHourlyRate ? Number(coach.defaultHourlyRate) : null}
+        />
       </div>
 
       {clients.length === 0 ? (
