@@ -54,25 +54,65 @@ type ParsedRow = { firstName: string; lastName: string; company?: string; needSu
 
 /**
  * "First Last, Company, What they need, email" per line — the shape of a row
- * someone copies out of a spreadsheet. Tabs and commas both split, so a direct
- * paste from Sheets lands correctly.
+ * someone copies out of a spreadsheet.
+ *
+ * Splitting is comma-or-tab, with two rules that matter in practice:
+ *
+ *  - If the line contains ANY tab, split on tabs only. A direct paste from
+ *    Sheets or Excel is tab-delimited, and its cells routinely contain commas.
+ *  - Otherwise split on commas but honour double quotes, so `"Acme, Inc"`
+ *    stays one field. Without this a single comma in a company name shifted
+ *    every later column — need←"Inc", email←the need text — silently, on the
+ *    exact flow this module's day-one value depends on.
  *
  * Only the name is required. Everything else defaults: stage to the first open
  * stage, opportunity type to Coaching, owner to whoever is pasting. They are
  * drafts to refine in the dossier, not final records.
  */
+export function splitRow(line: string): string[] {
+  if (line.includes("\t")) return line.split("\t").map((p) => p.trim());
+
+  const out: string[] = [];
+  let field = "";
+  let quoted = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      // A doubled quote inside a quoted field is a literal quote.
+      if (quoted && line[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (ch === "," && !quoted) {
+      out.push(field.trim());
+      field = "";
+    } else {
+      field += ch;
+    }
+  }
+  out.push(field.trim());
+  return out;
+}
+
+/** Split a full name so "Mary Jo Smith" keeps "Mary Jo" together. */
+export function splitName(name: string): { firstName: string; lastName: string } {
+  const parts = (name ?? "").split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { firstName: "", lastName: "" };
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  return { firstName: parts.slice(0, -1).join(" "), lastName: parts[parts.length - 1] };
+}
+
 export function parsePasted(text: string): ParsedRow[] {
   return text
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const [name, company, need, email] = line.split(/\t|,/).map((p) => p?.trim() ?? "");
-      // Everything before the last space is the first name, so "Mary Jo Smith"
-      // keeps "Mary Jo" together rather than losing "Jo".
-      const parts = (name ?? "").split(/\s+/).filter(Boolean);
-      const lastName = parts.length > 1 ? parts[parts.length - 1] : "";
-      const firstName = parts.length > 1 ? parts.slice(0, -1).join(" ") : (parts[0] ?? "");
+      const [name, company, need, email] = splitRow(line);
+      const { firstName, lastName } = splitName(name ?? "");
       return {
         firstName,
         lastName,

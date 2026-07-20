@@ -92,3 +92,100 @@ export async function clearNextActivityAt(
 export const STALEST_FIRST = {
   nextActivityAt: { sort: "asc", nulls: "first" },
 } as const satisfies Prisma.ProspectOrderByWithRelationInput;
+
+// ─── Activity detail for a page of prospects ──────────
+
+export type ActivityDetail = {
+  activityAt: Date;
+  notes: string | null;
+  owner: { id: string; name: string } | null;
+};
+
+/**
+ * The predicate defining "last activity": something that actually happened.
+ *
+ * Shared because it was hand-copied into four files, and if the rule ever
+ * changes the list view and the reports would silently disagree about
+ * staleness — which is the module's headline metric.
+ */
+export const LAST_ACTIVITY_WHERE = {
+  OR: [{ kind: "LOGGED" as const }, { completedAt: { not: null } }],
+};
+
+/**
+ * Last-completed and next-planned activity for a page of prospects, with the
+ * notes and owner each one carries.
+ *
+ * §7.1 asks for Joel's fields 7-9 (last activity date, notes, owner) and 11-12
+ * (next activity notes, owner), so a bare date is not enough. Four queries for
+ * the whole page regardless of size — never one per row.
+ */
+export async function activityDetailFor(
+  tx: Prisma.TransactionClient,
+  prospectIds: string[]
+): Promise<{ last: Map<string, ActivityDetail>; next: Map<string, ActivityDetail> }> {
+  const last = new Map<string, ActivityDetail>();
+  const next = new Map<string, ActivityDetail>();
+  if (prospectIds.length === 0) return { last, next };
+
+  const select = {
+    prospectId: true,
+    activityAt: true,
+    notes: true,
+    owner: { select: { id: true, name: true } },
+  } as const;
+
+  const [lastMax, nextMin] = await Promise.all([
+    tx.pipelineActivity.groupBy({
+      by: ["prospectId"],
+      where: { prospectId: { in: prospectIds }, ...LAST_ACTIVITY_WHERE },
+      _max: { activityAt: true },
+    }),
+    tx.pipelineActivity.groupBy({
+      by: ["prospectId"],
+      where: { prospectId: { in: prospectIds }, kind: "PLANNED", completedAt: null },
+      _min: { activityAt: true },
+    }),
+  ]);
+
+  const [lastRows, nextRows] = await Promise.all([
+    lastMax.length === 0
+      ? []
+      : tx.pipelineActivity.findMany({
+          where: {
+            // Re-apply the predicate. Without it a PLANNED row sharing the exact
+            // timestamp of the true last activity can win the first-wins dedup
+            // below and render a FUTURE plan as "last activity".
+            ...LAST_ACTIVITY_WHERE,
+            OR: lastMax
+              .filter((l) => l._max.activityAt !== null)
+              .map((l) => ({ prospectId: l.prospectId, activityAt: l._max.activityAt! })),
+          },
+          select,
+        }),
+    nextMin.length === 0
+      ? []
+      : tx.pipelineActivity.findMany({
+          where: {
+            kind: "PLANNED",
+            completedAt: null,
+            OR: nextMin
+              .filter((n) => n._min.activityAt !== null)
+              .map((n) => ({ prospectId: n.prospectId, activityAt: n._min.activityAt! })),
+          },
+          select,
+        }),
+  ]);
+
+  for (const r of lastRows) {
+    if (!last.has(r.prospectId)) {
+      last.set(r.prospectId, { activityAt: r.activityAt, notes: r.notes, owner: r.owner });
+    }
+  }
+  for (const r of nextRows) {
+    if (!next.has(r.prospectId)) {
+      next.set(r.prospectId, { activityAt: r.activityAt, notes: r.notes, owner: r.owner });
+    }
+  }
+  return { last, next };
+}

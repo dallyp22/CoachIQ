@@ -6,6 +6,7 @@ import { STALEST_FIRST } from "@/lib/pipeline/next-activity";
 import { liveStages } from "@/lib/pipeline/stages";
 import { AddProspectButton } from "./add-prospect";
 import { NextActivityCell, DaysInStage } from "./cells";
+import { CoachFilter } from "./coach-filter";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,7 @@ export const dynamic = "force-dynamic";
 export default async function PipelinePage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; stage?: string; coach?: string }>;
+  searchParams: Promise<{ status?: string; stage?: string; coach?: string; type?: string }>;
 }) {
   const coach = await requireCoachPage();
   const params = await searchParams;
@@ -33,9 +34,13 @@ export default async function PipelinePage({
   const stages = await liveStages();
   const openStages = stages.filter((s) => s.terminal === null);
 
+  const OPPORTUNITY_TYPES = ["COACHING", "FACILITATION", "IMPLEMENTATION", "MULTIPLE"];
+  const type = params.type && OPPORTUNITY_TYPES.includes(params.type) ? params.type : undefined;
+
   const where = {
     ...prospectWhere(coachId),
     ...(params.stage ? { stageId: params.stage } : {}),
+    ...(type ? { opportunityType: type as never } : {}),
     ...(status === "open"
       ? { stage: { terminal: null } }
       : status === "won"
@@ -104,10 +109,32 @@ export default async function PipelinePage({
         </div>
       </div>
 
-      <Filters status={status} stage={params.stage} stages={openStages} />
+      {coach.role !== "COACH" && coaches.length > 1 && (
+        <div className="mb-3">
+          <CoachFilter
+            coaches={coaches}
+            selected={params.coach ?? null}
+            basePath="/pipeline"
+            extraParams={{ status, stage: params.stage, type }}
+          />
+        </div>
+      )}
+
+      <Filters
+        status={status}
+        stage={params.stage}
+        stages={openStages}
+        type={type}
+        coach={params.coach}
+      />
 
       {prospects.length === 0 ? (
-        <EmptyState status={status} stages={openStages} coaches={coaches} />
+        <EmptyState
+          status={status}
+          stages={openStages}
+          coaches={coaches}
+          filtered={Boolean(params.stage || type || params.coach)}
+        />
       ) : (
         <div className="bg-surface border border-border rounded-[var(--radius-lg)] overflow-hidden">
           <div className="overflow-x-auto">
@@ -234,36 +261,66 @@ function Filters({
   status,
   stage,
   stages,
+  type,
+  coach,
 }: {
   status: string;
   stage?: string;
   stages: Array<{ id: string; name: string }>;
+  type?: string;
+  coach?: string;
 }) {
-  const tabs = [
-    { key: "open", label: "Open" },
-    { key: "won", label: "Won" },
-    { key: "lost", label: "Lost" },
-    { key: "all", label: "All" },
+  const link = (over: Record<string, string | undefined>) => {
+    const p = new URLSearchParams();
+    const merged = { status, stage, type, coach, ...over };
+    for (const [k, v] of Object.entries(merged)) if (v) p.set(k, v);
+    return `/pipeline?${p.toString()}`;
+  };
+
+  const chip = (active: boolean) =>
+    `px-3 py-1.5 text-sm rounded transition-colors ${
+      active ? "bg-accent-light text-accent font-medium" : "text-muted hover:text-foreground"
+    }`;
+
+  const TYPES = [
+    { key: "COACHING", label: "Coaching" },
+    { key: "FACILITATION", label: "Facilitation" },
+    { key: "IMPLEMENTATION", label: "Implementation" },
+    { key: "MULTIPLE", label: "Multiple" },
   ];
+
   return (
-    <div className="flex items-center gap-1 mb-4 flex-wrap">
-      {tabs.map((t) => (
-        <Link
-          key={t.key}
-          href={`/pipeline?status=${t.key}${stage ? `&stage=${stage}` : ""}`}
-          className={`px-3 py-1.5 text-sm rounded transition-colors ${
-            status === t.key
-              ? "bg-accent-light text-accent font-medium"
-              : "text-muted hover:text-foreground"
-          }`}
-        >
-          {t.label}
+    <div className="space-y-2 mb-4">
+      <div className="flex items-center gap-1 flex-wrap">
+        <span className="text-xs text-muted uppercase tracking-wide font-medium mr-1">Status</span>
+        {[
+          { key: "open", label: "Open" },
+          { key: "won", label: "Won" },
+          { key: "lost", label: "Lost" },
+          { key: "all", label: "All" },
+        ].map((t) => (
+          <Link key={t.key} href={link({ status: t.key })} className={chip(status === t.key)}>
+            {t.label}
+          </Link>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-1 flex-wrap">
+        <span className="text-xs text-muted uppercase tracking-wide font-medium mr-1">Type</span>
+        <Link href={link({ type: undefined })} className={chip(!type)}>
+          All
         </Link>
-      ))}
+        {TYPES.map((t) => (
+          <Link key={t.key} href={link({ type: t.key })} className={chip(type === t.key)}>
+            {t.label}
+          </Link>
+        ))}
+      </div>
+
       {stage && (
         <Link
-          href={`/pipeline?status=${status}`}
-          className="ml-2 text-xs text-muted hover:text-foreground transition-colors"
+          href={link({ stage: undefined })}
+          className="inline-block text-xs text-muted hover:text-foreground transition-colors"
         >
           Clear stage filter ({stages.find((s) => s.id === stage)?.name ?? "unknown"}) ✕
         </Link>
@@ -319,11 +376,30 @@ function EmptyState({
   status,
   stages,
   coaches,
+  filtered,
 }: {
   status: string;
   stages: Array<{ id: string; name: string }>;
   coaches: Array<{ id: string; name: string }>;
+  filtered: boolean;
 }) {
+  // Prospects may well exist — just not matching these filters. Telling someone
+  // to create data they already have, and hiding the way back, is worse than
+  // showing nothing.
+  if (filtered) {
+    return (
+      <div className="text-center py-16">
+        <h2 className="font-display text-xl text-foreground">No prospects match these filters</h2>
+        <p className="text-sm text-muted mt-2 mb-4">
+          Try widening them — there may be prospects in other stages or types.
+        </p>
+        <Link href="/pipeline" className="text-sm text-accent hover:text-accent-hover">
+          Clear all filters
+        </Link>
+      </div>
+    );
+  }
+
   if (status !== "open") {
     return (
       <div className="text-center py-16">

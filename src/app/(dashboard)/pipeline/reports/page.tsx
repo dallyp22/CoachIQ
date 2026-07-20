@@ -4,6 +4,8 @@ import { requireCoachPage } from "@/lib/authz-page";
 import { scopeCoachId, prospectWhere } from "@/lib/authz";
 import { liveStages } from "@/lib/pipeline/stages";
 import { buildPipelineSummary, formatDays, type ProspectRow } from "@/lib/pipeline/report-math";
+import { activityDetailFor } from "@/lib/pipeline/next-activity";
+import { CoachFilter } from "../coach-filter";
 
 export const dynamic = "force-dynamic";
 
@@ -44,15 +46,11 @@ export default async function PipelineReportsPage({
     },
   });
 
-  const lastActivity = await prisma.pipelineActivity.groupBy({
-    by: ["prospectId"],
-    where: {
-      prospectId: { in: openProspects.map((p) => p.id) },
-      OR: [{ kind: "LOGGED" }, { completedAt: { not: null } }],
-    },
-    _max: { activityAt: true },
-  });
-  const lastByProspect = new Map(lastActivity.map((l) => [l.prospectId, l._max.activityAt ?? null]));
+  // Joel's fields 7-9 and 11-12 need the notes and owner on BOTH activities,
+  // not just their dates — the report is named after his spec, so it has to
+  // carry his spec.
+  const { last, next } = await activityDetailFor(prisma, openProspects.map((p) => p.id));
+  const lastByProspect = new Map([...last].map(([id, d]) => [id, d.activityAt]));
 
   const rows: ProspectRow[] = openProspects.map((p) => ({
     id: p.id,
@@ -65,6 +63,15 @@ export default async function PipelineReportsPage({
   const summary = buildPipelineSummary(rows, openStages, new Date());
   const hot = openProspects.filter((p) => p.stage.isHot);
   const peak = Math.max(1, ...summary.byStage.map((s) => s.count));
+
+  const allCoaches =
+    coach.role === "COACH"
+      ? []
+      : await prisma.coach.findMany({
+          where: { status: { not: "INACTIVE" } },
+          orderBy: { name: "asc" },
+          select: { id: true, name: true },
+        });
 
   return (
     <div>
@@ -79,9 +86,15 @@ export default async function PipelineReportsPage({
       </Link>
 
       <h1 className="font-display text-[32px] text-foreground mb-1">Pipeline reports</h1>
-      <p className="text-sm text-muted mb-8">
+      <p className="text-sm text-muted mb-4">
         {summary.totalOpen} open prospect{summary.totalOpen === 1 ? "" : "s"}
       </p>
+
+      {allCoaches.length > 1 && (
+        <div className="mb-6">
+          <CoachFilter coaches={allCoaches} selected={params.coach ?? null} basePath="/pipeline/reports" />
+        </div>
+      )}
 
       {/* ─── Headline averages ─── */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
@@ -162,53 +175,83 @@ export default async function PipelineReportsPage({
                     <Th>Name</Th>
                     <Th className="hidden sm:table-cell">Company</Th>
                     <Th className="hidden md:table-cell">Opportunity</Th>
-                    <Th>Stage</Th>
-                    <Th>Next</Th>
-                    <Th className="hidden lg:table-cell">Coach</Th>
+                    <Th className="hidden xl:table-cell">Added</Th>
+                    <Th>Last activity</Th>
+                    <Th>Next activity</Th>
                   </tr>
                 </thead>
                 <tbody>
-                  {hot.map((p) => (
-                    <tr
-                      key={p.id}
-                      className="border-b border-border last:border-b-0 hover:bg-background transition-colors"
-                    >
-                      <td className="px-5 py-3">
-                        <Link
-                          href={`/pipeline/${p.id}`}
-                          className="font-display text-base text-foreground hover:text-accent transition-colors"
-                        >
-                          {`${p.firstName} ${p.lastName}`.trim()}
-                        </Link>
-                      </td>
-                      <td className="px-5 py-3 text-sm text-muted hidden sm:table-cell">
-                        {p.company || "—"}
-                      </td>
-                      <td className="px-5 py-3 text-sm text-muted hidden md:table-cell">
-                        {p.opportunityType.charAt(0) + p.opportunityType.slice(1).toLowerCase()}
-                      </td>
-                      <td className="px-5 py-3">
-                        <span className="inline-block px-2 py-0.5 text-xs font-medium rounded border bg-accent-light text-accent border-accent/25 whitespace-nowrap">
-                          {p.stage.name}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3">
-                        {p.nextActivityAt ? (
-                          <span className="font-mono text-sm text-foreground whitespace-nowrap">
-                            {new Date(p.nextActivityAt).toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                            })}
-                          </span>
-                        ) : (
-                          <span className="text-sm text-error whitespace-nowrap">None scheduled</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-3 text-sm text-muted hidden lg:table-cell">
-                        {p.assignedCoach?.name ?? "Unassigned"}
-                      </td>
-                    </tr>
-                  ))}
+                  {hot.map((p) => {
+                    const lastAct = last.get(p.id);
+                    const nextAct = next.get(p.id);
+                    return (
+                      <tr
+                        key={p.id}
+                        className="border-b border-border last:border-b-0 hover:bg-background transition-colors align-top"
+                      >
+                        <td className="px-5 py-3">
+                          <Link
+                            href={`/pipeline/${p.id}`}
+                            className="font-display text-base text-foreground hover:text-accent transition-colors"
+                          >
+                            {`${p.firstName} ${p.lastName}`.trim()}
+                          </Link>
+                          <p className="text-xs text-muted mt-0.5">{p.stage.name}</p>
+                        </td>
+                        <td className="px-5 py-3 text-sm text-muted hidden sm:table-cell">
+                          {p.company || "—"}
+                        </td>
+                        <td className="px-5 py-3 text-sm text-muted hidden md:table-cell">
+                          {p.opportunityType.charAt(0) + p.opportunityType.slice(1).toLowerCase()}
+                        </td>
+                        <td className="px-5 py-3 font-mono text-sm text-muted hidden xl:table-cell whitespace-nowrap">
+                          {fmt(p.createdAt)}
+                        </td>
+                        {/* Joel's fields 7-9: date, notes, owner */}
+                        <td className="px-5 py-3 min-w-[180px]">
+                          {lastAct ? (
+                            <>
+                              <span className="font-mono text-sm text-foreground whitespace-nowrap">
+                                {fmt(lastAct.activityAt)}
+                              </span>
+                              <p className="text-xs text-muted mt-0.5">
+                                {lastAct.owner?.name ?? "System"}
+                              </p>
+                              {lastAct.notes && (
+                                <p className="text-xs text-foreground mt-1 leading-snug">
+                                  {lastAct.notes}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-sm text-muted">Never contacted</span>
+                          )}
+                        </td>
+                        {/* Joel's fields 10-12: date, notes, owner */}
+                        <td className="px-5 py-3 min-w-[180px]">
+                          {nextAct ? (
+                            <>
+                              <span className="font-mono text-sm text-foreground whitespace-nowrap">
+                                {fmt(nextAct.activityAt)}
+                              </span>
+                              <p className="text-xs text-muted mt-0.5">
+                                {nextAct.owner?.name ?? "System"}
+                              </p>
+                              {nextAct.notes && (
+                                <p className="text-xs text-foreground mt-1 leading-snug">
+                                  {nextAct.notes}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-sm text-error whitespace-nowrap">
+                              None scheduled
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -227,6 +270,10 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
       {hint && <p className="text-[11px] text-muted mt-2 leading-snug">{hint}</p>}
     </div>
   );
+}
+
+function fmt(d: Date) {
+  return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function Th({ children, className = "" }: { children: React.ReactNode; className?: string }) {
