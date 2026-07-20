@@ -36,6 +36,7 @@ CREATE TABLE "coaches" (
     "fathomStatus" "StepStatus" NOT NULL DEFAULT 'PENDING',
     "fathomApiKey" TEXT,
     "fathomWebhookSecret" TEXT,
+    "fathomWebhookId" TEXT,
     "googleCalendarId" TEXT,
     "coachingTitleFilter" TEXT,
     "calendarSyncEnabled" BOOLEAN NOT NULL DEFAULT true,

@@ -122,11 +122,13 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 **Fix path:** Move invoice generation later (e.g. 12:15+), or run it as a step inside workday-sync after sync completes.
 **Added:** 2026-07-15 via /ship (adversarial review).
 
-### Cron alerting: total brief failure reads as HTTP 200 "partial" forever
-**Priority:** P2
-**What:** workday-sync returns 500 only when BOTH steps throw. A revoked LLM key makes every brief fail every run while sync succeeds → 200 `"partial"` indefinitely, so status-code-based cron monitoring (Vercel's default) never fires; detection depends on someone reading the `errors` array. Decide whether anything actually consumes that array.
-**Fix path:** Add alerting that inspects the `errors`/`failed` fields (e.g. wire the existing SMTP alert vars), or return a non-2xx when a whole step fails N runs in a row.
-**Added:** 2026-07-15 via /ship (adversarial review, investigate).
+### No alerting channel exists — cron partials and dropped recordings are log-only
+**Priority:** P1 (raised from P2 on 2026-07-19)
+**What:** Two silent-failure surfaces share one root cause: the app has no alerting mechanism at all. No mailer is installed, and the `COACHIQ_ALERT_EMAIL_*` / `COACHIQ_SMTP_*` vars in `.env.example` are v1 Python-worker leftovers that nothing in the TypeScript app reads — so "wire the existing SMTP alert vars" (the original fix path here) is not actually available.
+1. **Cron:** workday-sync returns 500 only when BOTH steps throw. A revoked LLM key makes every brief fail every run while sync succeeds → 200 `"partial"` indefinitely, so status-code monitoring never fires.
+2. **Fathom webhook (new in multi-coach):** a coach whose stored webhook secret is stale or undecryptable has every recording rejected with a 401, and Fathom stops retrying — the recordings are permanently lost. `src/lib/webhook-coach.ts` emits a named, actionable `console.error` ("coach X's signature did not verify — re-register") rather than a bare 401, which is a real improvement, but nothing pages anyone.
+**Fix path:** Pick one channel and wire both surfaces to it — a Slack incoming webhook is the least infrastructure, Resend if email is wanted. Or configure Vercel log drains/alerts on the `[fathom-webhook]` prefix. Both call sites already emit structured, greppable messages, so the remaining work is the channel itself.
+**Added:** 2026-07-15 via /ship (adversarial review); expanded 2026-07-19 during Phase 3 when the webhook gained the same failure shape and the SMTP vars turned out to be dead.
 
 ### Persist a sync high-water-mark so missed runs can't permanently lose billable sessions
 **Priority:** P1

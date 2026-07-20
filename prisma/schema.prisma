@@ -130,6 +130,11 @@ model Coach {
   /// directly, go through decryptOptional().
   fathomApiKey        String?
   fathomWebhookSecret String?
+  /// Fathom's id for the webhook we registered. The API has no list endpoint
+  /// (only create and delete), so this is the only way to know we already
+  /// registered one — it makes a double-submitted Add Coach idempotent
+  /// instead of creating a second webhook that double-ingests every meeting.
+  fathomWebhookId     String?
   googleCalendarId    String?
   /// Regex, validated at save time. Null falls back to the practice default.
   coachingTitleFilter String?
