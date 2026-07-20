@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:runtime": "PIPELINE_RUNTIME_TESTS=1 vitest run tests/api/pipeline --no-file-parallelism"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.0.7",
