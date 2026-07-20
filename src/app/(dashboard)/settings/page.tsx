@@ -1,6 +1,7 @@
 import { requireCoachPage } from "@/lib/authz-page";
 import { SettingsForm } from "./settings-form";
 import { CoachesSection } from "./coaches";
+import { PipelineStagesSection } from "./pipeline-stages";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,7 @@ export default async function SettingsPage() {
     <div className="space-y-6">
       <SettingsForm />
       <CoachesSection viewerRole={coach.role} />
+      <PipelineStagesSection />
     </div>
   );
 }
