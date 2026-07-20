@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { generateForAllDueClients } from "@/lib/billing/generate";
+import { requireCoach, authzResponse } from "@/lib/authz";
 
 /**
  * POST /api/invoices/generate
@@ -18,10 +19,18 @@ import { generateForAllDueClients } from "@/lib/billing/generate";
  * happening in the same minute) won't produce duplicate invoices.
  */
 export async function POST() {
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // generateForAllDueClients sweeps every active client in the practice with
+  // no coach filter, so a plain requireCoach() is not enough — a COACH must
+  // not be able to mint invoices across other coaches' books. Until invoice
+  // generation itself is coach-scoped, this stays an ADMIN action.
+  try {
+    await requireCoach("ADMIN");
+  } catch (err) {
+    return authzResponse(err);
   }
+
+  // Audit rows record the Clerk account that acted.
+  const { userId } = await auth();
 
   try {
     const result = await generateForAllDueClients({

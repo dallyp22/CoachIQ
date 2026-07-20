@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
 import { Decimal } from "@prisma/client/runtime/client";
 import { prisma } from "@/lib/db";
+import { requireCoach, scopeCoachId, canAccess, authzResponse } from "@/lib/authz";
 import { nextCadenceDate, type CadenceOpts } from "@/lib/billing/cadence";
 import type { BillingCadence } from "@/generated/prisma/client";
 
@@ -30,9 +30,12 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
   }
 
   const { id } = await params;
@@ -50,7 +53,7 @@ export async function GET(
       },
     },
   });
-  if (!client) {
+  if (!client || !canAccess(coachId, client.coachId)) {
     return NextResponse.json({ error: "Client not found" }, { status: 404 });
   }
 

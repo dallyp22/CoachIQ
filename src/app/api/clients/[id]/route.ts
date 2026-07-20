@@ -4,6 +4,7 @@ import { Decimal } from "@prisma/client/runtime/client";
 import { prisma } from "@/lib/db";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
 import { nextCadenceDate, type CadenceOpts } from "@/lib/billing/cadence";
+import { requireCoach, scopeCoachId, canAccess, authzResponse } from "@/lib/authz";
 
 /**
  * Update client profile.
@@ -17,16 +18,21 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
   }
+  // Audit rows record the Clerk account that acted, not the coach it resolves to.
+  const { userId } = await auth();
 
   const { id } = await params;
   const body = await request.json();
 
   const client = await prisma.client.findUnique({ where: { id } });
-  if (!client) {
+  if (!client || !canAccess(coachId, client.coachId)) {
     return NextResponse.json({ error: "Client not found" }, { status: 404 });
   }
 
@@ -177,7 +183,23 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   const { id } = await params;
+
+  const client = await prisma.client.findUnique({
+    where: { id },
+    select: { coachId: true },
+  });
+  if (!client || !canAccess(coachId, client.coachId)) {
+    return NextResponse.json({ error: "Client not found" }, { status: 404 });
+  }
 
   await prisma.client.update({
     where: { id },

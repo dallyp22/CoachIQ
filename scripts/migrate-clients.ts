@@ -33,9 +33,19 @@ async function main() {
   let created = 0;
   let skipped = 0;
 
+  // v1 registry predates multi-coach: everything in it belongs to the OWNER.
+  const owner = await prisma.coach.findFirst({
+    where: { role: "OWNER" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (!owner) throw new Error("No OWNER coach — run the multi-coach migration first.");
+
   for (const [email, data] of entries) {
     // Check if client already exists
-    const existing = await prisma.client.findUnique({ where: { email } });
+    const existing = await prisma.client.findUnique({
+      where: { coachId_email: { coachId: owner.id, email } },
+    });
     if (existing) {
       skipped++;
       continue;
@@ -43,6 +53,7 @@ async function main() {
 
     await prisma.client.create({
       data: {
+        coachId: owner.id,
         name: data.name,
         email: email.toLowerCase(),
         notebookId: data.notebook_id,

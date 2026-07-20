@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
+import { requireCoach, authzResponse } from "@/lib/authz";
 
 /**
  * GET /api/admin/billing/reset-preview
@@ -10,9 +10,10 @@ import { prisma } from "@/lib/db";
  * Todd commits. Read-only, no state change.
  */
 export async function GET() {
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    await requireCoach("OWNER");
+  } catch (err) {
+    return authzResponse(err);
   }
 
   const [invoices, adjustments, timeEntries, clientsWithStripe] = await Promise.all([

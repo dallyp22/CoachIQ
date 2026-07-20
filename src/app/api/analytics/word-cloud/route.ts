@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import {
+  requireCoach,
+  scopeCoachId,
+  clientWhere,
+  viaClientWhere,
+  authzResponse,
+} from "@/lib/authz";
 
 // Comprehensive stop words: standard English + contractions + filler + coaching noise
 const STOP_WORDS = new Set([
@@ -77,6 +84,14 @@ const STOP_WORDS = new Set([
  *   source=transcript|synopsis — which text to analyze (default: synopsis)
  */
 export async function GET(request: NextRequest) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, request.nextUrl.searchParams.get("coachId"));
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const clientId = searchParams.get("clientId");
@@ -97,6 +112,7 @@ export async function GET(request: NextRequest) {
     const dynamicStops = new Set(STOP_WORDS);
 
     const allClients = await prisma.client.findMany({
+      where: clientWhere(coachId),
       select: { name: true },
     });
     for (const c of allClients) {
@@ -116,7 +132,7 @@ export async function GET(request: NextRequest) {
 
     if (source === "synopsis") {
       const sessions = await prisma.session.findMany({
-        where: { ...where, synopsis: { not: null } },
+        where: { ...where, synopsis: { not: null }, ...viaClientWhere(coachId) },
         select: { synopsis: true },
       });
       texts = sessions.map((s) => s.synopsis!);
@@ -125,6 +141,7 @@ export async function GET(request: NextRequest) {
         where: {
           ...(clientId ? { clientId } : {}),
           session: Object.keys(dateFilter).length > 0 ? { date: dateFilter } : undefined,
+          ...viaClientWhere(coachId),
         },
         select: { fullText: true },
       });

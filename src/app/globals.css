@@ -32,6 +32,15 @@
   --accent: #D97706;
   --accent-hover: #B45309;
   --accent-light: #451A03;
+  /* Alert colors shift one step lighter on dark surfaces, matching how the
+     accent shifts. The light-mode values were never redefined here, so they
+     rendered unchanged on #1C1917: error measured 3.62:1 and info 3.38:1,
+     both under the 4.5:1 minimum for body text. These measure 6.32:1 and
+     6.88:1. Success and warning already passed but shift for consistency. */
+  --success: #4ADE80;
+  --warning: #FACC15;
+  --error: #F87171;
+  --info: #60A5FA;
 }
 
 @theme inline {

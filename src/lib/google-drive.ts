@@ -121,18 +121,32 @@ async function getRootFolderId(): Promise<string> {
   return _rootFolderId;
 }
 
-export async function ensureClientFolder(clientName: string): Promise<string> {
-  const cached = _clientFolderCache.get(clientName);
+/**
+ * Resolve a client's transcript folder under the owning coach's Drive root.
+ *
+ * `coachRootFolderId` is the folder in that coach's OWN Drive, shared with
+ * the app's Drive identity. Falls back to the practice-wide root for coaches
+ * who have not set one. The cache is keyed by root AND name — keying by name
+ * alone would hand two coaches with a same-named client the same folder.
+ */
+export async function ensureClientFolder(
+  clientName: string,
+  coachRootFolderId?: string | null
+): Promise<string> {
+  const root = coachRootFolderId || (await getRootFolderId());
+  const cacheKey = `${root}:${clientName}`;
+  const cached = _clientFolderCache.get(cacheKey);
   if (cached) return cached;
 
-  const root = await getRootFolderId();
   const folderId = await findOrCreateFolder(clientName, root);
-  _clientFolderCache.set(clientName, folderId);
+  _clientFolderCache.set(cacheKey, folderId);
   return folderId;
 }
 
-export async function ensurePendingFolder(): Promise<string> {
-  return ensureClientFolder(PENDING_FOLDER_NAME);
+export async function ensurePendingFolder(
+  coachRootFolderId?: string | null
+): Promise<string> {
+  return ensureClientFolder(PENDING_FOLDER_NAME, coachRootFolderId);
 }
 
 interface WriteTranscriptArgs {

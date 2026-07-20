@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
+import { requireCoach, authzResponse } from "@/lib/authz";
 
 interface ResetBody {
   confirm?: string;
@@ -21,14 +22,17 @@ interface ResetBody {
  * Wrapped in a single transaction so partial failure leaves the DB unchanged.
  * Logs a RESET event to billing_audit_logs with counts of what was wiped.
  *
- * Auth: Clerk middleware gates the /api/admin/* prefix; this handler also
- * captures the userId for the audit log actor field.
+ * Auth: OWNER only — this wipes billing state across the whole practice, so
+ * there is no coach-scoped version of it. The userId is captured alongside for
+ * the audit log actor field.
  */
 export async function POST(request: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    await requireCoach("OWNER");
+  } catch (err) {
+    return authzResponse(err);
   }
+  const { userId } = await auth();
 
   let body: ResetBody;
   try {

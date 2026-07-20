@@ -1,5 +1,12 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import {
+  requireCoach,
+  scopeCoachId,
+  clientWhere,
+  viaClientWhere,
+  authzResponse,
+} from "@/lib/authz";
 
 interface ParsedTurn {
   speaker: string;
@@ -22,7 +29,15 @@ function parseTranscriptTurns(fullText: string): ParsedTurn[] {
  * GET /api/analytics/practice-insights — practice-wide coaching patterns.
  * Aggregates talk ratios, question ratios, and ownership across all clients.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, request.nextUrl.searchParams.get("coachId"));
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   try {
     const settings = await prisma.coachSettings.findFirst({
       select: { coachName: true },
@@ -31,7 +46,7 @@ export async function GET() {
 
     // Get all clients with sessions that have transcripts
     const clients = await prisma.client.findMany({
-      where: { status: { not: "CHURNED" }, sessionCount: { gte: 3 } },
+      where: { status: { not: "CHURNED" }, sessionCount: { gte: 3 }, ...clientWhere(coachId) },
       select: { id: true, name: true },
     });
 
@@ -52,7 +67,7 @@ export async function GET() {
 
     for (const client of clients) {
       const transcripts = await prisma.transcript.findMany({
-        where: { clientId: client.id },
+        where: { clientId: client.id, ...viaClientWhere(coachId) },
         orderBy: { createdAt: "desc" },
         take: 10,
         select: { fullText: true },

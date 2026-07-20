@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { Decimal } from "@prisma/client/runtime/client";
 import { prisma } from "@/lib/db";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
+import { requireCoach, scopeCoachId, canAccess, authzResponse } from "@/lib/authz";
 
 interface AdjustBody {
   kind?: "credit" | "discount" | "expense";
@@ -29,10 +30,15 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
   }
+  // Audit rows record the Clerk account that acted, not the coach it resolves to.
+  const { userId } = await auth();
 
   const { id } = await params;
 
@@ -77,8 +83,15 @@ export async function POST(
     );
   }
 
-  const invoice = await prisma.invoice.findUnique({ where: { id } });
-  if (!invoice) {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id },
+    include: {
+      client: { select: { coachId: true } },
+      group: { select: { coachId: true } },
+    },
+  });
+  const invoiceCoachId = invoice?.client?.coachId ?? invoice?.group?.coachId ?? null;
+  if (!invoice || !canAccess(coachId, invoiceCoachId)) {
     return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
   }
 

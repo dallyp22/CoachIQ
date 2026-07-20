@@ -7,46 +7,68 @@ import {
   hasDriveCredentials,
   writeTranscript,
 } from "@/lib/google-drive";
-import crypto from "crypto";
-
-const WEBHOOK_SECRET = process.env.COACHIQ_FATHOM_WEBHOOK_SECRET || "";
-const COACH_EMAIL = (process.env.COACHIQ_COACH_EMAIL || "todd@growwithcocreate.com").toLowerCase();
-const COACHING_FILTER = /coaching|executive coaching|session/i;
-const TIMESTAMP_TOLERANCE = 300; // seconds
+import {
+  readSignatureHeaders,
+  isTimestampFresh,
+  recorderEmail,
+} from "@/lib/fathom";
+import { resolveWebhookCoach, describeFailure } from "@/lib/webhook-coach";
+import { filterCoachingEvents } from "@/lib/google-calendar";
 
 /**
- * Fathom Webhook Handler (TypeScript port)
+ * Fathom Webhook Handler
  *
  * Pipeline:
- *   1. Verify HMAC-SHA256 signature
+ *   1. Identify the sending coach and authenticate against THEIR secret
  *   2. Idempotency check (recording_id)
- *   3. Calendar title filter
- *   4. Identify client by email
+ *   3. Calendar title filter (the coach's own pattern)
+ *   4. Identify the client — within that coach's book only
  *   5. Calculate duration + billable minutes
  *   6. Create Session + Transcript in PostgreSQL
  *   7. Queue background jobs (embedding, synopsis)
+ *
+ * Every row this creates belongs to the coach resolved in step 1; an
+ * unmatched invitee becomes a PendingRecording for them rather than a
+ * console line.
  */
 export async function POST(request: NextRequest) {
   const payload = await request.arrayBuffer();
   const payloadBytes = Buffer.from(payload);
-  const body = JSON.parse(payloadBytes.toString());
+  // Parsed before auth because routing needs recorded_by, so it must not
+  // throw: an anonymous malformed POST should be a 400, not a 500. Shape is
+  // whatever Fathom sent, so it stays untyped here and is narrowed at use.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try {
+    body = JSON.parse(payloadBytes.toString());
+  } catch {
+    return NextResponse.json({ error: "Malformed JSON body" }, { status: 400 });
+  }
 
-  // 1. Verify HMAC signature
-  const webhookId = request.headers.get("webhook-id") || "";
-  const timestamp = request.headers.get("webhook-timestamp") || "";
-  const signature = request.headers.get("webhook-signature") || "";
-
-  if (!webhookId || !timestamp || !signature) {
+  // 1. Identify and authenticate the sending coach.
+  const sigHeaders = readSignatureHeaders(request.headers);
+  if (!sigHeaders) {
     return NextResponse.json(
       { error: "Missing webhook verification headers" },
       { status: 401 }
     );
   }
-
-  const sigError = verifySignature(payloadBytes, webhookId, timestamp, signature);
-  if (sigError) {
-    return NextResponse.json({ error: sigError }, { status: 401 });
+  if (!isTimestampFresh(sigHeaders.timestamp)) {
+    return NextResponse.json({ error: "Webhook timestamp too old or invalid" }, { status: 401 });
   }
+
+  const outcome = await resolveWebhookCoach(
+    payloadBytes,
+    sigHeaders,
+    recorderEmail(body)
+  );
+  if (!outcome.ok) {
+    // Fathom stops retrying eventually, so a rejected payload is a permanently
+    // lost recording. Never let that pass as a bare 401 nobody reads.
+    console.error(`[fathom-webhook] ${describeFailure(outcome)}`);
+    return NextResponse.json({ error: "Webhook signature verification failed" }, { status: 401 });
+  }
+  const coach = outcome.coach;
 
   // 2. Idempotency check
   const recordingId = String(body.recording_id || "");
@@ -61,17 +83,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ status: "duplicate", recordingId });
   }
 
-  // 3. Calendar title filter
+  // 3. Calendar title filter — the coach's own pattern, falling back to the
+  //    practice default. Previously a hard-coded regex that ignored the
+  //    configured setting entirely.
   const title = body.title || "";
-  if (!COACHING_FILTER.test(title)) {
+  if (filterCoachingEvents([{ summary: title }], coach.coachingTitleFilter).length === 0) {
     return NextResponse.json({ status: "skipped", reason: "not a coaching session" });
   }
 
-  // 4. Identify client
+  // 4. Identify the client — within this coach's book only.
+  //    is_external is computed by Fathom relative to the recorder's own email
+  //    domain, so it stays correct per coach without extra handling.
+  const coachAddresses = new Set(
+    [coach.loginEmail, ...coach.workEmails].map((e) => e.toLowerCase())
+  );
   const invitees: Array<{ email: string; name?: string; is_external?: boolean }> =
     body.calendar_invitees || [];
   const external = invitees.find(
-    (inv) => inv.is_external && inv.email?.toLowerCase() !== COACH_EMAIL
+    (inv) => inv.is_external && inv.email && !coachAddresses.has(inv.email.toLowerCase())
   );
 
   if (!external) {
@@ -81,6 +110,7 @@ export async function POST(request: NextRequest) {
   const clientEmail = external.email.toLowerCase();
   const client = await prisma.client.findFirst({
     where: {
+      coachId: coach.id,
       OR: [
         { email: clientEmail },
         { secondaryEmails: { has: clientEmail } },
@@ -89,15 +119,16 @@ export async function POST(request: NextRequest) {
   });
 
   if (!client) {
-    // Unknown client — log for review and stash a copy in Drive's _Pending Review
-    // folder so the transcript isn't lost while the client gets registered.
-    console.warn(`Unknown client: ${external.name} (${clientEmail}) — ${title}`);
+    // Unknown client. The transcript still goes to Drive so it isn't lost,
+    // but the reviewable record is a row: with per-coach Drive roots, an
+    // owner would otherwise have to open each coach's Drive to find these.
+    const pendingDate = body.recording_start_time
+      ? new Date(body.recording_start_time)
+      : new Date();
+    let driveFileId: string | null = null;
 
     if (hasDriveCredentials()) {
       try {
-        const pendingDate = body.recording_start_time
-          ? new Date(body.recording_start_time)
-          : new Date();
         const pendingContent = formatTranscript(
           title,
           external.name || clientEmail,
@@ -107,8 +138,8 @@ export async function POST(request: NextRequest) {
           body.action_items,
           body.url
         );
-        const pendingFolder = await ensurePendingFolder();
-        await writeTranscript({
+        const pendingFolder = await ensurePendingFolder(coach.driveRootFolderId);
+        driveFileId = await writeTranscript({
           clientName: external.name || clientEmail,
           filename: `${external.name || clientEmail}_${recordingId}.txt`,
           content: pendingContent,
@@ -118,6 +149,27 @@ export async function POST(request: NextRequest) {
         console.error("Pending Drive write failed:", driveErr);
       }
     }
+
+    // Idempotent: Fathom retries, and a retry must not stack duplicate rows.
+    await prisma.pendingRecording.upsert({
+      where: {
+        coachId_fathomRecordingId: { coachId: coach.id, fathomRecordingId: recordingId },
+      },
+      update: { driveFileId },
+      create: {
+        coachId: coach.id,
+        fathomRecordingId: recordingId,
+        inviteeEmails: invitees.map((i) => i.email).filter(Boolean),
+        driveFileId,
+        title,
+        recordedAt: pendingDate,
+      },
+    });
+
+    console.warn(
+      `[fathom-webhook] Unmatched recording for coach "${coach.name}": ` +
+        `${external.name || clientEmail} <${clientEmail}> — "${title}". Awaiting review.`
+    );
 
     return NextResponse.json({
       status: "pending_review",
@@ -223,7 +275,7 @@ export async function POST(request: NextRequest) {
     try {
       let folderId = client.driveFolderId;
       if (!folderId) {
-        folderId = await ensureClientFolder(client.name);
+        folderId = await ensureClientFolder(client.name, coach.driveRootFolderId);
         await prisma.client.update({
           where: { id: client.id },
           data: { driveFolderId: folderId },
@@ -324,50 +376,6 @@ export async function POST(request: NextRequest) {
 }
 
 // ─── HMAC Signature Verification ─────────────────────────────────
-
-function verifySignature(
-  payload: Buffer,
-  webhookId: string,
-  timestamp: string,
-  signature: string
-): string | null {
-  // Replay protection
-  const ts = parseInt(timestamp, 10);
-  if (isNaN(ts) || Math.abs(Date.now() / 1000 - ts) > TIMESTAMP_TOLERANCE) {
-    return "Webhook timestamp too old or invalid";
-  }
-
-  // Construct signed content: "webhook_id.timestamp.body"
-  const signedContent = Buffer.concat([
-    Buffer.from(`${webhookId}.${timestamp}.`),
-    payload,
-  ]);
-
-  // Decode secret (strip "whsec_" prefix)
-  let secretKey = WEBHOOK_SECRET;
-  if (secretKey.startsWith("whsec_")) {
-    secretKey = secretKey.slice(6);
-  }
-  const secretBytes = Buffer.from(secretKey, "base64");
-
-  // Compute expected HMAC-SHA256
-  const expected = crypto
-    .createHmac("sha256", secretBytes)
-    .update(signedContent)
-    .digest("base64");
-
-  // Compare against provided signatures (may be space-separated with version prefix)
-  const providedSigs = signature.split(" ");
-  for (const sig of providedSigs) {
-    const parts = sig.split(",");
-    const sigValue = parts[parts.length - 1];
-    if (crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sigValue))) {
-      return null; // Valid
-    }
-  }
-
-  return "Webhook signature verification failed";
-}
 
 // ─── Transcript Formatting ───────────────────────────────────────
 

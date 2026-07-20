@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db";
 import { notFound } from "next/navigation";
 import { ClientDossier } from "./client-dossier";
+import { requireCoachPage } from "@/lib/authz-page";
+import { scopeCoachId, canAccess } from "@/lib/authz";
 
 export default async function ClientDossierPage({
   params,
@@ -8,6 +10,8 @@ export default async function ClientDossierPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const coach = await requireCoachPage();
+  const coachId = scopeCoachId(coach);
 
   const client = await prisma.client.findUnique({
     where: { id },
@@ -20,11 +24,13 @@ export default async function ClientDossierPage({
     },
   });
 
-  if (!client) notFound();
+  // Same 404 as a missing client: confirming that someone else's client
+  // exists is itself a disclosure.
+  if (!client || !canAccess(coachId, client.coachId)) notFound();
 
   // Active groups list for the picker (cheap; small set).
   const groups = await prisma.billingGroup.findMany({
-    where: { status: "ACTIVE" },
+    where: { status: "ACTIVE", ...(coachId ? { coachId } : {}) },
     select: { id: true, name: true, displayName: true },
     orderBy: { name: "asc" },
   });

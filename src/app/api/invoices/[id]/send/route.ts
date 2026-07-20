@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getStripe } from "@/lib/stripe";
+import { requireCoach, scopeCoachId, canAccess, authzResponse } from "@/lib/authz";
 
 /**
  * Send an approved invoice via Stripe.
@@ -16,6 +17,14 @@ export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   const { id } = await params;
 
   const invoice = await prisma.invoice.findUnique({
@@ -23,7 +32,8 @@ export async function POST(
     include: { client: true, group: true },
   });
 
-  if (!invoice) {
+  const invoiceCoachId = invoice?.client?.coachId ?? invoice?.group?.coachId ?? null;
+  if (!invoice || !canAccess(coachId, invoiceCoachId)) {
     return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
   }
 

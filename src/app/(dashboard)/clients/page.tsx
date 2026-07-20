@@ -1,10 +1,17 @@
 import { prisma } from "@/lib/db";
 import Link from "next/link";
+import { requireCoachPage } from "@/lib/authz-page";
+import { scopeCoachId, clientWhere } from "@/lib/authz";
+import { AddClientButton } from "./add-client";
 
 export const dynamic = "force-dynamic";
 
 export default async function ClientsPage() {
+  const coach = await requireCoachPage();
+  const coachId = scopeCoachId(coach);
+
   const clients = await prisma.client.findMany({
+    where: clientWhere(coachId),
     orderBy: { name: "asc" },
     include: {
       sessions: {
@@ -26,10 +33,13 @@ export default async function ClientsPage() {
             {activeCount} active of {clients.length} total
           </p>
         </div>
+        <AddClientButton
+          defaultRate={coach.defaultHourlyRate ? Number(coach.defaultHourlyRate) : null}
+        />
       </div>
 
       {clients.length === 0 ? (
-        <EmptyState />
+        <EmptyState defaultRate={coach.defaultHourlyRate ? Number(coach.defaultHourlyRate) : null} />
       ) : (
         <div className="bg-surface border border-border rounded-[var(--radius-lg)] overflow-hidden">
           <table className="w-full">
@@ -120,12 +130,17 @@ export default async function ClientsPage() {
   );
 }
 
+/**
+ * Semantic tokens rather than fixed hexes: the tokens shift on dark surfaces,
+ * so these badges follow the theme instead of staying light-mode green on a
+ * near-black table.
+ */
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
-    ACTIVE: "bg-[#F0FDF4] text-[#166534] border-[#BBF7D0]",
-    PAUSED: "bg-[#FEFCE8] text-[#854D0E] border-[#FEF08A]",
-    CHURNED: "bg-[#FEF2F2] text-[#991B1B] border-[#FECACA]",
-    PROSPECT: "bg-[#EFF6FF] text-[#1E40AF] border-[#BFDBFE]",
+    ACTIVE: "bg-success/10 text-success border-success/25",
+    PAUSED: "bg-warning/10 text-warning border-warning/25",
+    CHURNED: "bg-error/10 text-error border-error/25",
+    PROSPECT: "bg-info/10 text-info border-info/25",
   };
 
   return (
@@ -139,17 +154,23 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function EmptyState() {
+/**
+ * The previous copy promised clients were "automatically detected from your
+ * coaching session recordings" behind an Import from Fathom button that had
+ * no handler. Neither was true: the webhook files unmatched recordings for
+ * review and has never created a client. An empty state that describes a
+ * feature the product does not have is worse than no empty state.
+ */
+function EmptyState({ defaultRate }: { defaultRate: number | null }) {
   return (
     <div className="text-center py-16">
       <h2 className="font-display text-xl text-foreground">No clients yet</h2>
-      <p className="text-sm text-muted mt-2 max-w-sm mx-auto">
-        Import from Fathom to get started. Clients are automatically detected
-        from your coaching session recordings.
+      <p className="text-sm text-muted mt-2 mb-6 max-w-md mx-auto leading-relaxed">
+        Add your clients with the email address they join sessions with. That address is how
+        a Fathom recording finds its way to the right person — without it, sessions land in
+        review instead of on a client.
       </p>
-      <button className="mt-6 px-5 py-2.5 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors">
-        Import from Fathom
-      </button>
+      <AddClientButton defaultRate={defaultRate} />
     </div>
   );
 }

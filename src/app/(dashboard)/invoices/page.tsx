@@ -1,13 +1,18 @@
 import { prisma } from "@/lib/db";
 import { GenerateInvoicesButton, InvoiceCard } from "./actions";
 import { detectDrift } from "@/lib/billing/snapshot";
+import { requireCoachPage } from "@/lib/authz-page";
+import { scopeCoachId, viaClientWhere, invoiceWhere } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
 
 export default async function InvoicesPage() {
+  const coach = await requireCoachPage();
+  const coachId = scopeCoachId(coach);
+
   // Get unbilled summary
   const unbilledEntries = await prisma.timeEntry.findMany({
-    where: { status: "UNBILLED" },
+    where: { status: "UNBILLED", ...viaClientWhere(coachId) },
     include: { client: { select: { name: true } } },
   });
   const unbilledTotal = unbilledEntries.reduce(
@@ -20,14 +25,14 @@ export default async function InvoicesPage() {
   // snapshot drift. APPROVED invoices stay in the staging queue alongside
   // DRAFTs so the Send button remains reachable until the invoice is sent.
   const draftInvoices = await prisma.invoice.findMany({
-    where: { status: { in: ["DRAFT", "APPROVED"] } },
+    where: { status: { in: ["DRAFT", "APPROVED"] }, ...invoiceWhere(coachId) },
     include: { client: true, group: { include: { members: true } } },
     orderBy: { createdAt: "desc" },
   });
 
   // Get sent/paid/overdue invoices
   const invoiceHistory = await prisma.invoice.findMany({
-    where: { status: { in: ["SENT", "PAID", "OVERDUE"] } },
+    where: { status: { in: ["SENT", "PAID", "OVERDUE"] }, ...invoiceWhere(coachId) },
     include: {
       client: { select: { name: true, id: true } },
       group: { select: { name: true, id: true } },
@@ -187,14 +192,19 @@ export default async function InvoicesPage() {
   );
 }
 
+/**
+ * Semantic tokens, not fixed hexes — these shift with the theme. SENT uses
+ * the accent because an invoice awaiting payment is a state to notice, not a
+ * warning; DRAFT and VOID stay neutral.
+ */
 function InvoiceStatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
-    DRAFT: "bg-[#F5F5F4] text-[#78716C] border-[#E7E5E4]",
-    APPROVED: "bg-[#EFF6FF] text-[#1E40AF] border-[#BFDBFE]",
-    SENT: "bg-[#FEF3C7] text-[#92400E] border-[#FDE68A]",
-    PAID: "bg-[#F0FDF4] text-[#166534] border-[#BBF7D0]",
-    OVERDUE: "bg-[#FEF2F2] text-[#991B1B] border-[#FECACA]",
-    VOID: "bg-[#F5F5F4] text-[#78716C] border-[#E7E5E4]",
+    DRAFT: "bg-border/40 text-muted border-border",
+    APPROVED: "bg-info/10 text-info border-info/25",
+    SENT: "bg-accent/10 text-accent border-accent/25",
+    PAID: "bg-success/10 text-success border-success/25",
+    OVERDUE: "bg-error/10 text-error border-error/25",
+    VOID: "bg-border/40 text-muted border-border",
   };
 
   return (

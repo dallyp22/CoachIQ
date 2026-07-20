@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import {
+  requireCoach,
+  scopeCoachId,
+  viaClientWhere,
+  authzResponse,
+} from "@/lib/authz";
 
 interface ParsedTurn {
   speaker: string;
@@ -35,6 +41,14 @@ interface SessionMetrics {
  *   limit=number (default 50)
  */
 export async function GET(request: NextRequest) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, request.nextUrl.searchParams.get("coachId"));
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const clientId = searchParams.get("clientId");
@@ -52,8 +66,10 @@ export async function GET(request: NextRequest) {
     const coachFirstName = coachName.split(" ")[0];
 
     // Fetch sessions with transcripts ordered chronologically
+    // Out-of-scope clientIds fall out here as an empty result — identical to a
+    // client with no parseable transcripts, so nothing leaks about existence.
     const sessions = await prisma.session.findMany({
-      where: { clientId },
+      where: { clientId, ...viaClientWhere(coachId) },
       orderBy: { date: "asc" },
       take: limit,
       select: {
@@ -69,7 +85,7 @@ export async function GET(request: NextRequest) {
     });
 
     // Fetch topic similarity between consecutive sessions via embeddings
-    const similarities = await computeTopicSimilarities(clientId, limit);
+    const similarities = await computeTopicSimilarities(clientId, limit, coachId);
 
     const metrics: SessionMetrics[] = [];
 
@@ -246,9 +262,17 @@ function computeLexicalDiversity(text: string): number {
 
 async function computeTopicSimilarities(
   clientId: string,
-  limit: number
+  limit: number,
+  coachId: string | null
 ): Promise<Map<string, number>> {
   const result = new Map<string, number>();
+
+  const params: unknown[] = [clientId, limit];
+  let coachFilter = "";
+  if (coachId) {
+    params.push(coachId);
+    coachFilter = ` AND c."coachId" = $${params.length}`;
+  }
 
   try {
     // Get consecutive session pairs with embeddings
@@ -262,8 +286,10 @@ async function computeTopicSimilarities(
           ROW_NUMBER() OVER (ORDER BY s.date ASC) as rn
         FROM sessions s
         JOIN transcripts t ON t."sessionId" = s.id
+        JOIN clients c ON s."clientId" = c.id
         WHERE s."clientId" = $1
           AND t.embedding IS NOT NULL
+          ${coachFilter}
         ORDER BY s.date ASC
         LIMIT $2
       )
@@ -272,7 +298,7 @@ async function computeTopicSimilarities(
         1 - (curr.embedding <=> prev.embedding) as similarity
       FROM ordered_sessions curr
       JOIN ordered_sessions prev ON prev.rn = curr.rn - 1
-    `, clientId, limit);
+    `, ...params);
 
     for (const row of rows) {
       result.set(row.session_id, Number(row.similarity));

@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { snapshotBillable } from "@/lib/billing/snapshot";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
+import { requireCoach, scopeCoachId, canAccess, authzResponse } from "@/lib/authz";
 
 /**
  * POST /api/invoices/[id]/refresh-from-client
@@ -18,10 +19,15 @@ export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
   }
+  // Audit rows record the Clerk account that acted, not the coach it resolves to.
+  const { userId } = await auth();
 
   const { id } = await params;
 
@@ -29,7 +35,8 @@ export async function POST(
     where: { id },
     include: { client: true, group: { include: { members: true } } },
   });
-  if (!invoice) {
+  const invoiceCoachId = invoice?.client?.coachId ?? invoice?.group?.coachId ?? null;
+  if (!invoice || !canAccess(coachId, invoiceCoachId)) {
     return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
   }
 

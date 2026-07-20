@@ -1,11 +1,23 @@
 import { Sidebar } from "@/components/sidebar";
 import { MobileNav } from "@/components/mobile-nav";
+import { requireCoachPage } from "@/lib/authz-page";
 
-export default function DashboardLayout({
+/**
+ * One gate for the whole dashboard.
+ *
+ * Pages that read coach-owned data still resolve their own coach — they need
+ * the id to scope their queries. This layer exists so that pages holding no
+ * server data (client components fetching from already-scoped APIs) still
+ * send a signed-in stranger to /no-access, rather than rendering a shell that
+ * fails request by request.
+ */
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  await requireCoachPage();
+
   return (
     <div className="flex h-full flex-col lg:flex-row">
       <MobileNav />

@@ -122,11 +122,13 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 **Fix path:** Move invoice generation later (e.g. 12:15+), or run it as a step inside workday-sync after sync completes.
 **Added:** 2026-07-15 via /ship (adversarial review).
 
-### Cron alerting: total brief failure reads as HTTP 200 "partial" forever
-**Priority:** P2
-**What:** workday-sync returns 500 only when BOTH steps throw. A revoked LLM key makes every brief fail every run while sync succeeds → 200 `"partial"` indefinitely, so status-code-based cron monitoring (Vercel's default) never fires; detection depends on someone reading the `errors` array. Decide whether anything actually consumes that array.
-**Fix path:** Add alerting that inspects the `errors`/`failed` fields (e.g. wire the existing SMTP alert vars), or return a non-2xx when a whole step fails N runs in a row.
-**Added:** 2026-07-15 via /ship (adversarial review, investigate).
+### No alerting channel exists — cron partials and dropped recordings are log-only
+**Priority:** P1 (raised from P2 on 2026-07-19)
+**What:** Two silent-failure surfaces share one root cause: the app has no alerting mechanism at all. No mailer is installed, and the `COACHIQ_ALERT_EMAIL_*` / `COACHIQ_SMTP_*` vars in `.env.example` are v1 Python-worker leftovers that nothing in the TypeScript app reads — so "wire the existing SMTP alert vars" (the original fix path here) is not actually available.
+1. **Cron:** workday-sync returns 500 only when BOTH steps throw. A revoked LLM key makes every brief fail every run while sync succeeds → 200 `"partial"` indefinitely, so status-code monitoring never fires.
+2. **Fathom webhook (new in multi-coach):** a coach whose stored webhook secret is stale or undecryptable has every recording rejected with a 401, and Fathom stops retrying — the recordings are permanently lost. `src/lib/webhook-coach.ts` emits a named, actionable `console.error` ("coach X's signature did not verify — re-register") rather than a bare 401, which is a real improvement, but nothing pages anyone.
+**Fix path:** Pick one channel and wire both surfaces to it — a Slack incoming webhook is the least infrastructure, Resend if email is wanted. Or configure Vercel log drains/alerts on the `[fathom-webhook]` prefix. Both call sites already emit structured, greppable messages, so the remaining work is the channel itself.
+**Added:** 2026-07-15 via /ship (adversarial review); expanded 2026-07-19 during Phase 3 when the webhook gained the same failure shape and the SMTP vars turned out to be dead.
 
 ### Persist a sync high-water-mark so missed runs can't permanently lose billable sessions
 **Priority:** P1
@@ -173,6 +175,56 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 **What:** Dedup is a ±1h check-then-act on `(clientId, targetSessionDate)` with no unique constraint — concurrent manual-button + cron runs can double-generate, and back-to-back sessions under 1h apart for the same client suppress the second brief. 2026-07-19 adversarial review added: a session rescheduled by under 1h after its brief generated gets no fresh brief and the old brief keeps the wrong `targetSessionDate`; and `generatePrepBrief` stamps every cron brief `delivered: true` even for later-cancelled or already-started sessions, so the delivered flag is unreliable.
 **Fix path:** Store the calendar event ID on PrepBrief, dedup on it, and add a unique constraint (mirrors the Session.calendarEventId pattern); regenerate on event-time change; set delivered only when the brief is actually surfaced.
 **Added:** 2026-07-06 via /ship (adversarial review, finding 10); expanded 2026-07-19.
+
+## Tooling
+
+### `npm run lint` is unusable — 2,682 errors, almost all from .venv
+**Priority:** P3
+**What:** ESLint walks `.venv/lib` (the Python virtualenv from the v1 worker) and third-party JS in `chrome-extension/`, producing 11,345 problems of which ~2,682 are errors. Real errors in authored `src/` code are buried; verified 2026-07-19 that the current branch has zero lint errors in changed files, but only by filtering the output by hand.
+**Why:** A lint command nobody can read is a lint command nobody runs, so it catches nothing. It also can't be wired into CI in this state.
+**Fix path:** Add `.venv/`, `chrome-extension/`, and `src/generated/` to the ESLint ignore config (flat config `ignores` in `eslint.config.mjs`), then fix whatever genuine errors remain in `src/` and `scripts/`.
+**Added:** 2026-07-19 during /ship.
+
+## Design System Follow-ups
+
+### Chart colors don't follow the theme
+**Priority:** P3
+**What:** `src/components/client-insights.tsx` passes literal hexes (`#16A34A`, `#2563EB`) to Recharts for line/area/sparkline colors. Recharts takes color values, not CSS classes, so these can't use the semantic tokens the rest of the app now uses — they stay light-mode green and blue on the dark surface.
+**Why:** Dark mode is reachable and automatic (`theme-toggle.tsx` honors `prefers-color-scheme` on first load), so anyone with a dark OS sees charts that don't match the surrounding UI.
+**Fix path:** Read the resolved token values at runtime (`getComputedStyle(document.documentElement).getPropertyValue('--success')`) and pass those to Recharts, re-reading on theme change; or define a small chart palette with explicit light/dark pairs.
+**Added:** 2026-07-19 via /plan-design-review follow-up sweep.
+
+## Multi-Coach Follow-ups (from 2026-07-19 plan-eng-review; foundation not yet built)
+
+### No way to create a client in the product — blocks Kurt onboarding
+**Priority:** P0 — **SCHEDULED into multi-coach foundation Phase 4** (2026-07-19), not awaiting triage.
+**What:** There is no client-creation path anywhere: no `POST /api/clients`, no server action, no UI. Verified 2026-07-19 — the only `prisma.client.create` calls are in `scripts/migrate-clients.ts` (the one-time v1 registry import that loaded Todd's 86 clients) and `scripts/seed-test-invoice.ts`. The Fathom webhook never creates clients either; unmatched recordings go to Pending Review.
+**Why it matters:** The Kurt onboarding checklist item #5 is "Client list w/ session emails — we enter them," and the foundation plan's Phase 6 QA says "Enter Kurt's clients with rates." Neither is possible today. Adding a coach without a way to add their clients produces an account that can never receive a matched recording.
+**Fix path:** `POST /api/clients` + Add Client form + bulk paste, scoped to the resolved coach, pre-filling `hourlyRate` from that coach's `defaultHourlyRate` (this is where the finding-15 rate default actually lands). Full spec in the build plan's Phase 4 (~1 day).
+**Depends on:** Phase 2 authz (done — needs the resolved coach for scoping).
+**Added:** 2026-07-19 during Phase 2 build — plan gap, not covered by any existing phase.
+
+### My Settings self-serve tier + coach edit/deactivate UI
+**Priority:** P2
+**What:** The deferred half of Pipeline PRD §12.5 (D2 scope trim, 2026-07-19): per-coach self-serve settings (own calendar ID, coaching filter, profile) and proper edit/deactivate UI on the Coaches list. v1 ships Add Coach + Coaches list + role gates only; owner edits coach rows on behalf of coaches.
+**Why:** Fine at 2 coaches; at 3+ the owner becomes a helpdesk for every calendar tweak, and INACTIVE needs a real button.
+**Depends on:** Multi-coach foundation shipped.
+**Added:** 2026-07-19 via /plan-eng-review.
+
+### Drop deprecated CoachSettings identity columns
+**Priority:** P3
+**What:** After the Settings rewire (old Coach Profile/Integrations sections repointed at the OWNER's Coach row), `coachName`, `coachEmail`, `googleCalendarId`, `coachingTitleFilter`, `fathomWebhookSecret` on CoachSettings are dead columns with `/// @deprecated` comments. Drop them in a follow-up migration after ~2 weeks of soak post-Kurt-onboarding.
+**Why:** Dead columns invite the written-but-never-read divergence bug class back (this repo's signature failure: DB fathomWebhookSecret/stripeSecretKey were UI-edited but env always won).
+**Caution:** Destructive migration — hand-write it with the same pgvector-column care as the foundation migration.
+**Depends on:** Foundation shipped + soak.
+**Added:** 2026-07-19 via /plan-eng-review.
+
+### NotebookLM multi-coach story
+**Priority:** P3
+**What:** NLM notebooks are per-client under Todd's single NotebookLM account (`COACHIQ_NOTEBOOKLM_STORAGE_PATH`, global `nlmLastSynced`). Kurt's clients get transcripts in his Drive root but no NotebookLM notebooks — deliberately. Decide per-coach NLM (Kurt's own account + per-coach storage path) as part of the Phase 4 NLM worker rebuild; design the rebuilt worker per-coach from the start.
+**Why:** "Where's Kurt's NotebookLM?" will come up at the onboarding meeting — the answer is "deliberately later, with the worker rebuild."
+**Depends on:** Phase 4 NLM worker migration (existing TODO below).
+**Added:** 2026-07-19 via /plan-eng-review.
 
 ## Phase 4 Bugs
 

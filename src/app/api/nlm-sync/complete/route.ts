@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import {
+  requireCoach,
+  scopeCoachId,
+  clientWhere,
+  viaClientWhere,
+  authzResponse,
+} from "@/lib/authz";
 
 interface SyncResult {
   sessionId: string;
@@ -17,6 +24,14 @@ interface SyncResult {
  * created notebook IDs on client records.
  */
 export async function POST(request: NextRequest) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, request.nextUrl.searchParams.get("coachId"));
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   const body = await request.json();
   const results: SyncResult[] = body.results;
 
@@ -33,16 +48,19 @@ export async function POST(request: NextRequest) {
 
   for (const r of results) {
     if (r.success) {
-      await prisma.session.update({
-        where: { id: r.sessionId },
+      // updateMany rather than update so an out-of-scope sessionId is a silent
+      // no-op instead of a throw that would confirm the row exists.
+      const updated = await prisma.session.updateMany({
+        where: { id: r.sessionId, ...viaClientWhere(coachId) },
         data: { nlmInjected: true },
       });
+      if (updated.count === 0) continue;
       marked++;
 
       // If a new notebook was created, save it on the client
       if (r.notebookId && r.clientId) {
-        const client = await prisma.client.findUnique({
-          where: { id: r.clientId },
+        const client = await prisma.client.findFirst({
+          where: { id: r.clientId, ...clientWhere(coachId) },
           select: { notebookId: true },
         });
         if (client && !client.notebookId) {

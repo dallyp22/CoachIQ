@@ -134,12 +134,34 @@ async function fetchEvents(
 /**
  * Filter events by coaching title regex from CoachSettings.
  */
+export const DEFAULT_COACHING_FILTER = "coaching|executive coaching|session";
+
+/**
+ * Compile a coaching-title filter, falling back to the default when the
+ * stored pattern is invalid.
+ *
+ * The pattern comes from an editable setting, so a stray "(" would otherwise
+ * throw synchronously inside whatever is calling — which now includes the
+ * Fathom webhook, where a throw means a permanently lost recording, and the
+ * twice-daily cron, where it means a whole workday of failed runs.
+ */
+export function compileCoachingFilter(filterPattern?: string | null): RegExp {
+  const pattern = filterPattern?.trim() || DEFAULT_COACHING_FILTER;
+  try {
+    return new RegExp(pattern, "i");
+  } catch {
+    console.error(
+      `Invalid coachingTitleFilter ${JSON.stringify(pattern)} — falling back to the default. Fix it in Settings.`
+    );
+    return new RegExp(DEFAULT_COACHING_FILTER, "i");
+  }
+}
+
 export function filterCoachingEvents(
   events: calendar_v3.Schema$Event[],
   filterPattern?: string | null
 ): calendar_v3.Schema$Event[] {
-  const pattern = filterPattern || "coaching|executive coaching|session";
-  const regex = new RegExp(pattern, "i");
+  const regex = compileCoachingFilter(filterPattern);
   return events.filter((e) => e.summary && regex.test(e.summary));
 }
 

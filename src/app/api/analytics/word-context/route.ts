@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import {
+  requireCoach,
+  scopeCoachId,
+  viaClientWhere,
+  authzResponse,
+} from "@/lib/authz";
 
 /**
  * GET /api/analytics/word-context — for a given word in the word cloud,
@@ -31,6 +37,14 @@ interface Match {
 }
 
 export async function GET(request: NextRequest) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, request.nextUrl.searchParams.get("coachId"));
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   try {
     const url = new URL(request.url);
     const word = (url.searchParams.get("word") ?? "").trim();
@@ -53,8 +67,8 @@ export async function GET(request: NextRequest) {
 
     const matches =
       source === "transcript"
-        ? await transcriptMatches(word, clientId, startDate, endDate)
-        : await synopsisMatches(word, clientId, startDate, endDate);
+        ? await transcriptMatches(word, clientId, startDate, endDate, coachId)
+        : await synopsisMatches(word, clientId, startDate, endDate, coachId);
 
     return NextResponse.json({
       word,
@@ -75,11 +89,16 @@ async function transcriptMatches(
   word: string,
   clientId: string | null,
   startDate: string | null,
-  endDate: string | null
+  endDate: string | null,
+  coachId: string | null
 ): Promise<Match[]> {
   const params: unknown[] = [word];
   const filters: string[] = [];
 
+  if (coachId) {
+    params.push(coachId);
+    filters.push(`c."coachId" = $${params.length}::uuid`);
+  }
   if (clientId) {
     params.push(clientId);
     filters.push(`s."clientId" = $${params.length}::uuid`);
@@ -150,7 +169,8 @@ async function synopsisMatches(
   word: string,
   clientId: string | null,
   startDate: string | null,
-  endDate: string | null
+  endDate: string | null,
+  coachId: string | null
 ): Promise<Match[]> {
   // Pull candidate sessions cheaply via ILIKE first, then do precise word-
   // boundary matching + sentence extraction in JS. ILIKE keeps the result
@@ -174,6 +194,7 @@ async function synopsisMatches(
         contains: word,
         mode: "insensitive",
       },
+      ...viaClientWhere(coachId),
     },
     orderBy: { date: "desc" },
     take: 50,
