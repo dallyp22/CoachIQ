@@ -177,11 +177,11 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 ## Multi-Coach Follow-ups (from 2026-07-19 plan-eng-review; foundation not yet built)
 
 ### No way to create a client in the product — blocks Kurt onboarding
-**Priority:** P0
+**Priority:** P0 — **SCHEDULED into multi-coach foundation Phase 4** (2026-07-19), not awaiting triage.
 **What:** There is no client-creation path anywhere: no `POST /api/clients`, no server action, no UI. Verified 2026-07-19 — the only `prisma.client.create` calls are in `scripts/migrate-clients.ts` (the one-time v1 registry import that loaded Todd's 86 clients) and `scripts/seed-test-invoice.ts`. The Fathom webhook never creates clients either; unmatched recordings go to Pending Review.
-**Why it matters now:** The Kurt onboarding checklist item #5 is "Client list w/ session emails — we enter them," and the foundation plan's Phase 6 QA says "Enter Kurt's clients with rates." Neither is possible today. Adding a coach without a way to add their clients produces an account that can never receive a matched recording.
-**Fix path:** `POST /api/clients` + a minimal Add Client form, scoped to the resolved coach, pre-filling `hourlyRate` from that coach's `defaultHourlyRate` (this is where the finding-15 rate default actually lands). A CSV/bulk paste variant would suit onboarding a whole roster at once. Alternatively a stopgap import script mirroring `migrate-clients.ts`.
-**Depends on:** Phase 2 authz (needs the resolved coach for scoping).
+**Why it matters:** The Kurt onboarding checklist item #5 is "Client list w/ session emails — we enter them," and the foundation plan's Phase 6 QA says "Enter Kurt's clients with rates." Neither is possible today. Adding a coach without a way to add their clients produces an account that can never receive a matched recording.
+**Fix path:** `POST /api/clients` + Add Client form + bulk paste, scoped to the resolved coach, pre-filling `hourlyRate` from that coach's `defaultHourlyRate` (this is where the finding-15 rate default actually lands). Full spec in the build plan's Phase 4 (~1 day).
+**Depends on:** Phase 2 authz (done — needs the resolved coach for scoping).
 **Added:** 2026-07-19 during Phase 2 build — plan gap, not covered by any existing phase.
 
 ### My Settings self-serve tier + coach edit/deactivate UI
