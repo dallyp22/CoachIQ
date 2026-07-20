@@ -1,10 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { requireCoach, authzResponse } from "@/lib/authz";
 
 /**
- * GET /api/settings — fetch coach settings
+ * GET /api/settings — fetch practice settings.
+ *
+ * ADMIN and above only. This is practice-level configuration — Stripe,
+ * AI keys, invoice numbering — not per-coach profile, so a COACH has no
+ * business reading it even masked. (Per-coach self-serve settings are a
+ * separate, later surface.)
  */
 export async function GET() {
+  try {
+    await requireCoach("ADMIN");
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   let settings = await prisma.coachSettings.findFirst();
   if (!settings) {
     settings = await prisma.coachSettings.create({ data: {} });
@@ -24,6 +36,12 @@ export async function GET() {
  * PATCH /api/settings — update coach settings
  */
 export async function PATCH(request: NextRequest) {
+  try {
+    await requireCoach("ADMIN");
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   const body = await request.json();
 
   let settings = await prisma.coachSettings.findFirst();

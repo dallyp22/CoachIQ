@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { requireCoach, scopeCoachId, canAccess, authzResponse } from "@/lib/authz";
 
 /**
  * Approve a draft invoice.
@@ -12,11 +13,26 @@ export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   const { id } = await params;
 
-  const invoice = await prisma.invoice.findUnique({ where: { id } });
+  const invoice = await prisma.invoice.findUnique({
+    where: { id },
+    include: {
+      client: { select: { coachId: true } },
+      group: { select: { coachId: true } },
+    },
+  });
 
-  if (!invoice) {
+  const invoiceCoachId = invoice?.client?.coachId ?? invoice?.group?.coachId ?? null;
+  if (!invoice || !canAccess(coachId, invoiceCoachId)) {
     return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
   }
 

@@ -1,5 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { requireCoach, scopeCoachId, canAccess, authzResponse } from "@/lib/authz";
+
+/**
+ * An invoice carries a clientId XOR a groupId, so its owning coach comes from
+ * whichever side is populated.
+ */
+const INVOICE_OWNER_INCLUDE = {
+  client: { select: { coachId: true } },
+  group: { select: { coachId: true } },
+} as const;
+
+function invoiceCoachId(invoice: {
+  client?: { coachId: string } | null;
+  group?: { coachId: string } | null;
+}): string | null {
+  return invoice.client?.coachId ?? invoice.group?.coachId ?? null;
+}
 
 /**
  * Update a draft invoice — edit line items, notes, amounts.
@@ -10,11 +27,22 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   const { id } = await params;
   const body = await request.json();
 
-  const invoice = await prisma.invoice.findUnique({ where: { id } });
-  if (!invoice) {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id },
+    include: INVOICE_OWNER_INCLUDE,
+  });
+  if (!invoice || !canAccess(coachId, invoiceCoachId(invoice))) {
     return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
   }
   if (invoice.status !== "DRAFT") {
@@ -57,10 +85,21 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   const { id } = await params;
 
-  const invoice = await prisma.invoice.findUnique({ where: { id } });
-  if (!invoice) {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id },
+    include: INVOICE_OWNER_INCLUDE,
+  });
+  if (!invoice || !canAccess(coachId, invoiceCoachId(invoice))) {
     return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
   }
   if (invoice.status !== "DRAFT") {

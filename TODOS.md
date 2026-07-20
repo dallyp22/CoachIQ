@@ -174,6 +174,38 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 **Fix path:** Store the calendar event ID on PrepBrief, dedup on it, and add a unique constraint (mirrors the Session.calendarEventId pattern); regenerate on event-time change; set delivered only when the brief is actually surfaced.
 **Added:** 2026-07-06 via /ship (adversarial review, finding 10); expanded 2026-07-19.
 
+## Multi-Coach Follow-ups (from 2026-07-19 plan-eng-review; foundation not yet built)
+
+### No way to create a client in the product — blocks Kurt onboarding
+**Priority:** P0
+**What:** There is no client-creation path anywhere: no `POST /api/clients`, no server action, no UI. Verified 2026-07-19 — the only `prisma.client.create` calls are in `scripts/migrate-clients.ts` (the one-time v1 registry import that loaded Todd's 86 clients) and `scripts/seed-test-invoice.ts`. The Fathom webhook never creates clients either; unmatched recordings go to Pending Review.
+**Why it matters now:** The Kurt onboarding checklist item #5 is "Client list w/ session emails — we enter them," and the foundation plan's Phase 6 QA says "Enter Kurt's clients with rates." Neither is possible today. Adding a coach without a way to add their clients produces an account that can never receive a matched recording.
+**Fix path:** `POST /api/clients` + a minimal Add Client form, scoped to the resolved coach, pre-filling `hourlyRate` from that coach's `defaultHourlyRate` (this is where the finding-15 rate default actually lands). A CSV/bulk paste variant would suit onboarding a whole roster at once. Alternatively a stopgap import script mirroring `migrate-clients.ts`.
+**Depends on:** Phase 2 authz (needs the resolved coach for scoping).
+**Added:** 2026-07-19 during Phase 2 build — plan gap, not covered by any existing phase.
+
+### My Settings self-serve tier + coach edit/deactivate UI
+**Priority:** P2
+**What:** The deferred half of Pipeline PRD §12.5 (D2 scope trim, 2026-07-19): per-coach self-serve settings (own calendar ID, coaching filter, profile) and proper edit/deactivate UI on the Coaches list. v1 ships Add Coach + Coaches list + role gates only; owner edits coach rows on behalf of coaches.
+**Why:** Fine at 2 coaches; at 3+ the owner becomes a helpdesk for every calendar tweak, and INACTIVE needs a real button.
+**Depends on:** Multi-coach foundation shipped.
+**Added:** 2026-07-19 via /plan-eng-review.
+
+### Drop deprecated CoachSettings identity columns
+**Priority:** P3
+**What:** After the Settings rewire (old Coach Profile/Integrations sections repointed at the OWNER's Coach row), `coachName`, `coachEmail`, `googleCalendarId`, `coachingTitleFilter`, `fathomWebhookSecret` on CoachSettings are dead columns with `/// @deprecated` comments. Drop them in a follow-up migration after ~2 weeks of soak post-Kurt-onboarding.
+**Why:** Dead columns invite the written-but-never-read divergence bug class back (this repo's signature failure: DB fathomWebhookSecret/stripeSecretKey were UI-edited but env always won).
+**Caution:** Destructive migration — hand-write it with the same pgvector-column care as the foundation migration.
+**Depends on:** Foundation shipped + soak.
+**Added:** 2026-07-19 via /plan-eng-review.
+
+### NotebookLM multi-coach story
+**Priority:** P3
+**What:** NLM notebooks are per-client under Todd's single NotebookLM account (`COACHIQ_NOTEBOOKLM_STORAGE_PATH`, global `nlmLastSynced`). Kurt's clients get transcripts in his Drive root but no NotebookLM notebooks — deliberately. Decide per-coach NLM (Kurt's own account + per-coach storage path) as part of the Phase 4 NLM worker rebuild; design the rebuilt worker per-coach from the start.
+**Why:** "Where's Kurt's NotebookLM?" will come up at the onboarding meeting — the answer is "deliberately later, with the worker rebuild."
+**Depends on:** Phase 4 NLM worker migration (existing TODO below).
+**Added:** 2026-07-19 via /plan-eng-review.
+
 ## Phase 4 Bugs
 
 ### NLM retry_failed.py is broken

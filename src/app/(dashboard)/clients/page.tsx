@@ -1,10 +1,16 @@
 import { prisma } from "@/lib/db";
 import Link from "next/link";
+import { requireCoachPage } from "@/lib/authz-page";
+import { scopeCoachId, clientWhere } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
 
 export default async function ClientsPage() {
+  const coach = await requireCoachPage();
+  const coachId = scopeCoachId(coach);
+
   const clients = await prisma.client.findMany({
+    where: clientWhere(coachId),
     orderBy: { name: "asc" },
     include: {
       sessions: {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getOpenAIKey } from "@/lib/ai";
+import { requireCoach, scopeCoachId, authzResponse } from "@/lib/authz";
 
 interface SearchResult {
   sessionId: string;
@@ -21,7 +22,17 @@ interface SearchResult {
  *   4. Merge and deduplicate results
  */
 export async function POST(request: NextRequest) {
-  const { query, clientId, limit = 15 } = await request.json();
+  // Search ranks across every transcript in the practice — without a coach
+  // scope a COACH would surface another coach's confidential session content.
+  let coach;
+  try {
+    coach = await requireCoach();
+  } catch (err) {
+    return authzResponse(err);
+  }
+
+  const { query, clientId, coachId: requestedCoachId, limit = 15 } = await request.json();
+  const coachId = scopeCoachId(coach, requestedCoachId);
 
   if (!query || typeof query !== "string" || query.trim().length === 0) {
     return NextResponse.json({ results: [], method: "none" });
@@ -34,17 +45,17 @@ export async function POST(request: NextRequest) {
   let method = "none";
 
   // 1. Client name search — always run
-  const clientResults = await clientNameSearch(trimmedQuery, clientId, safeLimit);
+  const clientResults = await clientNameSearch(trimmedQuery, clientId, coachId, safeLimit);
 
   // 2. Content search — semantic with full-text fallback
   let contentResults: SearchResult[] = [];
   try {
     const apiKey = await getOpenAIKey();
     const embedding = await generateEmbedding(trimmedQuery, apiKey);
-    contentResults = await semanticSearch(embedding, clientId, safeLimit);
+    contentResults = await semanticSearch(embedding, clientId, coachId, safeLimit);
     method = "semantic";
   } catch {
-    contentResults = await fullTextSearch(trimmedQuery, clientId, safeLimit);
+    contentResults = await fullTextSearch(trimmedQuery, clientId, coachId, safeLimit);
     method = contentResults.length > 0 ? "fulltext" : "client";
   }
 
@@ -80,13 +91,18 @@ export async function POST(request: NextRequest) {
 async function clientNameSearch(
   query: string,
   clientId: string | undefined,
+  coachId: string | null,
   limit: number
 ): Promise<SearchResult[]> {
   const params: unknown[] = [`%${query}%`, limit];
-  let clientFilter = "";
+  let filters = "";
   if (clientId) {
-    clientFilter = `AND c.id = $3`;
     params.push(clientId);
+    filters += ` AND c.id = $${params.length}`;
+  }
+  if (coachId) {
+    params.push(coachId);
+    filters += ` AND c."coachId" = $${params.length}`;
   }
 
   const rows = await prisma.$queryRawUnsafe<
@@ -114,7 +130,7 @@ async function clientNameSearch(
     JOIN clients c ON s."clientId" = c.id
     LEFT JOIN transcripts t ON t."sessionId" = s.id
     WHERE (c.name ILIKE $1 OR c.company ILIKE $1)
-    ${clientFilter}
+    ${filters}
     ORDER BY s.date DESC
     LIMIT $2
   `, ...params);
@@ -153,14 +169,19 @@ async function generateEmbedding(text: string, apiKey: string): Promise<number[]
 async function semanticSearch(
   embedding: number[],
   clientId: string | undefined,
+  coachId: string | null,
   limit: number
 ): Promise<SearchResult[]> {
   const embeddingStr = `[${embedding.join(",")}]`;
   const params: unknown[] = [embeddingStr, limit];
-  let clientFilter = "";
+  let filters = "";
   if (clientId) {
-    clientFilter = `AND t."clientId" = $3`;
     params.push(clientId);
+    filters += ` AND t."clientId" = $${params.length}`;
+  }
+  if (coachId) {
+    params.push(coachId);
+    filters += ` AND c."coachId" = $${params.length}`;
   }
 
   const rows = await prisma.$queryRawUnsafe<
@@ -188,7 +209,7 @@ async function semanticSearch(
     JOIN sessions s ON t."sessionId" = s.id
     JOIN clients c ON t."clientId" = c.id
     WHERE t.embedding IS NOT NULL
-    ${clientFilter}
+    ${filters}
     ORDER BY t.embedding <=> $1::vector
     LIMIT $2
   `, ...params);
@@ -210,13 +231,18 @@ async function semanticSearch(
 async function fullTextSearch(
   query: string,
   clientId: string | undefined,
+  coachId: string | null,
   limit: number
 ): Promise<SearchResult[]> {
   const params: unknown[] = [query, limit];
-  let clientFilter = "";
+  let filters = "";
   if (clientId) {
-    clientFilter = `AND t."clientId" = $3`;
     params.push(clientId);
+    filters += ` AND t."clientId" = $${params.length}`;
+  }
+  if (coachId) {
+    params.push(coachId);
+    filters += ` AND c."coachId" = $${params.length}`;
   }
 
   const rows = await prisma.$queryRawUnsafe<
@@ -246,7 +272,7 @@ async function fullTextSearch(
     JOIN sessions s ON t."sessionId" = s.id
     JOIN clients c ON t."clientId" = c.id
     WHERE t.search_text @@ plainto_tsquery('english', $1)
-    ${clientFilter}
+    ${filters}
     ORDER BY score DESC
     LIMIT $2
   `, ...params);

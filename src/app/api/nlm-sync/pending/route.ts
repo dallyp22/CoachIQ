@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import {
+  requireCoach,
+  scopeCoachId,
+  viaClientWhere,
+  authzResponse,
+} from "@/lib/authz";
 
 /**
  * GET /api/nlm-sync/pending?clientId={optional}
@@ -8,6 +14,14 @@ import { prisma } from "@/lib/db";
  * grouped by client. Only includes sessions that have a transcript.
  */
 export async function GET(request: NextRequest) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, request.nextUrl.searchParams.get("coachId"));
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   const clientId = request.nextUrl.searchParams.get("clientId");
 
   const sessions = await prisma.session.findMany({
@@ -15,6 +29,7 @@ export async function GET(request: NextRequest) {
       nlmInjected: false,
       transcript: { isNot: null },
       ...(clientId ? { clientId } : {}),
+      ...viaClientWhere(coachId),
     },
     include: {
       client: { select: { id: true, name: true, notebookId: true } },

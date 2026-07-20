@@ -1,13 +1,18 @@
 import { prisma } from "@/lib/db";
 import { GenerateInvoicesButton, InvoiceCard } from "./actions";
 import { detectDrift } from "@/lib/billing/snapshot";
+import { requireCoachPage } from "@/lib/authz-page";
+import { scopeCoachId, viaClientWhere, invoiceWhere } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
 
 export default async function InvoicesPage() {
+  const coach = await requireCoachPage();
+  const coachId = scopeCoachId(coach);
+
   // Get unbilled summary
   const unbilledEntries = await prisma.timeEntry.findMany({
-    where: { status: "UNBILLED" },
+    where: { status: "UNBILLED", ...viaClientWhere(coachId) },
     include: { client: { select: { name: true } } },
   });
   const unbilledTotal = unbilledEntries.reduce(
@@ -20,14 +25,14 @@ export default async function InvoicesPage() {
   // snapshot drift. APPROVED invoices stay in the staging queue alongside
   // DRAFTs so the Send button remains reachable until the invoice is sent.
   const draftInvoices = await prisma.invoice.findMany({
-    where: { status: { in: ["DRAFT", "APPROVED"] } },
+    where: { status: { in: ["DRAFT", "APPROVED"] }, ...invoiceWhere(coachId) },
     include: { client: true, group: { include: { members: true } } },
     orderBy: { createdAt: "desc" },
   });
 
   // Get sent/paid/overdue invoices
   const invoiceHistory = await prisma.invoice.findMany({
-    where: { status: { in: ["SENT", "PAID", "OVERDUE"] } },
+    where: { status: { in: ["SENT", "PAID", "OVERDUE"] }, ...invoiceWhere(coachId) },
     include: {
       client: { select: { name: true, id: true } },
       group: { select: { name: true, id: true } },

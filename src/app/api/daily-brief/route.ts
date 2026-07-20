@@ -1,6 +1,13 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getChatProvider } from "@/lib/ai";
+import {
+  requireCoach,
+  scopeCoachId,
+  clientWhere,
+  viaClientWhere,
+  authzResponse,
+} from "@/lib/authz";
 import {
   getCalendar,
   filterCoachingEvents,
@@ -14,7 +21,15 @@ import {
  * Returns a structured object (no markdown) so the client can render brand
  * typography reliably and we don't have to parse model output.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, request.nextUrl.searchParams.get("coachId"));
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   try {
     const settings = await prisma.coachSettings.findFirst();
     if (!settings?.googleCalendarId || !hasCalendarCredentials()) {
@@ -64,7 +79,7 @@ export async function GET() {
 
     // Match events to clients
     const clients = await prisma.client.findMany({
-      where: { status: { not: "CHURNED" } },
+      where: { status: { not: "CHURNED" }, ...clientWhere(coachId) },
       select: {
         id: true,
         name: true,
@@ -129,7 +144,7 @@ export async function GET() {
 
       if (matchedClient) {
         const lastSession = await prisma.session.findFirst({
-          where: { clientId: matchedClient.id },
+          where: { clientId: matchedClient.id, ...viaClientWhere(coachId) },
           orderBy: { date: "desc" },
           select: { synopsis: true, actionItems: true },
         });

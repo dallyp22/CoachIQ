@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
+import { requireCoach, scopeCoachId, canAccess, authzResponse } from "@/lib/authz";
 import { Decimal } from "@prisma/client/runtime/client";
 
 /**
@@ -11,8 +12,13 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
+  }
 
   const { id } = await params;
   const group = await prisma.billingGroup.findUnique({
@@ -36,7 +42,9 @@ export async function GET(
     },
   });
 
-  if (!group) return NextResponse.json({ error: "Group not found" }, { status: 404 });
+  if (!group || !canAccess(coachId, group.coachId)) {
+    return NextResponse.json({ error: "Group not found" }, { status: 404 });
+  }
 
   return NextResponse.json({
     ...group,
@@ -65,11 +73,26 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
+  }
+  // Audit rows record the Clerk account that acted, not the coach it resolves to.
   const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
   const body = await request.json();
+
+  const existing = await prisma.billingGroup.findUnique({
+    where: { id },
+    select: { coachId: true },
+  });
+  if (!existing || !canAccess(coachId, existing.coachId)) {
+    return NextResponse.json({ error: "Group not found" }, { status: 404 });
+  }
 
   const updates: Record<string, unknown> = {};
 
@@ -131,10 +154,25 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, null);
+  } catch (err) {
+    return authzResponse(err);
+  }
+  // Audit rows record the Clerk account that acted, not the coach it resolves to.
   const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
+
+  const existing = await prisma.billingGroup.findUnique({
+    where: { id },
+    select: { coachId: true },
+  });
+  if (!existing || !canAccess(coachId, existing.coachId)) {
+    return NextResponse.json({ error: "Group not found" }, { status: 404 });
+  }
 
   const blockingInvoices = await prisma.invoice.count({
     where: { groupId: id, status: { not: "VOID" } },

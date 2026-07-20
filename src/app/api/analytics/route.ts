@@ -1,16 +1,31 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import {
+  requireCoach,
+  scopeCoachId,
+  clientWhere,
+  viaClientWhere,
+  authzResponse,
+} from "@/lib/authz";
 
 /**
  * GET /api/analytics — aggregate analytics data
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  let coachId: string | null;
+  try {
+    const coach = await requireCoach();
+    coachId = scopeCoachId(coach, request.nextUrl.searchParams.get("coachId"));
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   // Sessions per month (last 12 months)
   const twelveMonthsAgo = new Date();
   twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
 
   const sessions = await prisma.session.findMany({
-    where: { date: { gte: twelveMonthsAgo } },
+    where: { date: { gte: twelveMonthsAgo }, ...viaClientWhere(coachId) },
     select: { date: true, durationMinutes: true, billableMinutes: true, clientId: true },
     orderBy: { date: "asc" },
   });
@@ -37,7 +52,7 @@ export async function GET() {
 
   // Top clients by session count
   const topClients = await prisma.client.findMany({
-    where: { sessionCount: { gt: 0 } },
+    where: { sessionCount: { gt: 0 }, ...clientWhere(coachId) },
     orderBy: { sessionCount: "desc" },
     take: 15,
     select: { name: true, sessionCount: true, hourlyRate: true },
@@ -51,11 +66,14 @@ export async function GET() {
   }));
 
   // Overall stats
-  const totalClients = await prisma.client.count({ where: { status: "ACTIVE" } });
-  const totalSessions = await prisma.session.count();
-  const totalTranscripts = await prisma.transcript.count();
+  const totalClients = await prisma.client.count({
+    where: { status: "ACTIVE", ...clientWhere(coachId) },
+  });
+  const totalSessions = await prisma.session.count({ where: viaClientWhere(coachId) });
+  const totalTranscripts = await prisma.transcript.count({ where: viaClientWhere(coachId) });
 
   const allTimeEntries = await prisma.timeEntry.findMany({
+    where: viaClientWhere(coachId),
     select: { amount: true, status: true },
   });
   const totalBilled = allTimeEntries.reduce((sum, e) => sum + Number(e.amount), 0);
@@ -68,7 +86,7 @@ export async function GET() {
 
   // Sessions per client distribution
   const clientSessionCounts = await prisma.client.findMany({
-    where: { sessionCount: { gt: 0 } },
+    where: { sessionCount: { gt: 0 }, ...clientWhere(coachId) },
     select: { sessionCount: true },
   });
   const avgSessionsPerClient =

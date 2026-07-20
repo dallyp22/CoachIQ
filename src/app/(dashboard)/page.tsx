@@ -1,10 +1,14 @@
 import { prisma } from "@/lib/db";
 import Link from "next/link";
 import { CoachingCalendar } from "@/components/coaching-calendar";
+import { requireCoachPage } from "@/lib/authz-page";
+import { scopeCoachId, clientWhere, viaClientWhere } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
+  const coach = await requireCoachPage();
+  const coachId = scopeCoachId(coach);
   const now = new Date();
   const greeting =
     now.getHours() < 12
@@ -22,7 +26,7 @@ export default async function DashboardPage() {
 
   // Query real stats
   const activeClients = await prisma.client.count({
-    where: { status: "ACTIVE" },
+    where: { status: "ACTIVE", ...clientWhere(coachId) },
   });
 
   const startOfWeek = new Date(now);
@@ -30,12 +34,12 @@ export default async function DashboardPage() {
   startOfWeek.setHours(0, 0, 0, 0);
 
   const sessionsThisWeek = await prisma.session.count({
-    where: { date: { gte: startOfWeek } },
+    where: { date: { gte: startOfWeek }, ...viaClientWhere(coachId) },
   });
 
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const monthSessions = await prisma.session.findMany({
-    where: { date: { gte: startOfMonth } },
+    where: { date: { gte: startOfMonth }, ...viaClientWhere(coachId) },
     select: { billableMinutes: true },
   });
 
@@ -46,7 +50,7 @@ export default async function DashboardPage() {
 
   // Billing stats
   const unbilledEntries = await prisma.timeEntry.findMany({
-    where: { status: "UNBILLED" },
+    where: { status: "UNBILLED", ...viaClientWhere(coachId) },
   });
   const unbilledAmount = unbilledEntries.reduce(
     (sum, e) => sum + Number(e.amount),
@@ -65,6 +69,7 @@ export default async function DashboardPage() {
 
   // Recent sessions for the feed
   const recentSessions = await prisma.session.findMany({
+    where: viaClientWhere(coachId),
     orderBy: { date: "desc" },
     take: 8,
     include: {
@@ -75,7 +80,7 @@ export default async function DashboardPage() {
   return (
     <div>
       <h1 className="font-display text-[32px] text-foreground">
-        {greeting}, Todd
+        {greeting}, {coach.name.split(" ")[0]}
       </h1>
       <p className="font-mono text-sm text-muted mt-1">{dateStr}</p>
 

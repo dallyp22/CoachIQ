@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { GroupDetail } from "./group-detail";
+import { requireCoachPage } from "@/lib/authz-page";
+import { scopeCoachId, canAccess, clientWhere } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +13,9 @@ export default async function BillingGroupPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const coach = await requireCoachPage();
+  const coachId = scopeCoachId(coach);
+
   const group = await prisma.billingGroup.findUnique({
     where: { id },
     include: {
@@ -31,11 +36,12 @@ export default async function BillingGroupPage({
       },
     },
   });
-  if (!group) notFound();
+  if (!group || !canAccess(coachId, group.coachId)) notFound();
 
-  // Available clients (not already in this group, status ACTIVE)
+  // Available clients (not already in this group, status ACTIVE). Restricted
+  // to the group's own coach: every member must share the group's coach.
   const availableClients = await prisma.client.findMany({
-    where: { status: "ACTIVE", billingGroupId: null },
+    where: { status: "ACTIVE", billingGroupId: null, ...clientWhere(group.coachId) },
     select: { id: true, name: true, email: true },
     orderBy: { name: "asc" },
   });

@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import {
+  requireCoach,
+  scopeCoachId,
+  resolveCoachConfig,
+  clientWhere,
+  viaClientWhere,
+  authzResponse,
+} from "@/lib/authz";
+import {
   getCalendar,
   filterCoachingEvents,
   eventDurationMinutes,
@@ -15,9 +23,21 @@ import {
  *   timeMax=ISO        — custom range end
  */
 export async function GET(request: NextRequest) {
+  let coachId: string | null;
+  let coach;
+  try {
+    coach = await requireCoach();
+    coachId = scopeCoachId(coach, request.nextUrl.searchParams.get("coachId"));
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   try {
     const settings = await prisma.coachSettings.findFirst();
-    const calendarId = settings?.googleCalendarId;
+    // Each coach reads THEIR calendar. Falling back to the practice setting
+    // would show Kurt Todd's schedule.
+    const config = resolveCoachConfig(coach, settings);
+    const calendarId = config.googleCalendarId;
 
     if (!calendarId) {
       return NextResponse.json(
@@ -54,11 +74,11 @@ export async function GET(request: NextRequest) {
     });
 
     const rawEvents = res.data.items || [];
-    const coachingEvents = filterCoachingEvents(rawEvents, settings.coachingTitleFilter);
+    const coachingEvents = filterCoachingEvents(rawEvents, config.coachingTitleFilter);
 
     // Load clients
     const clients = await prisma.client.findMany({
-      where: { status: { not: "CHURNED" } },
+      where: { status: { not: "CHURNED" }, ...clientWhere(coachId) },
       select: {
         id: true,
         name: true,
@@ -79,14 +99,18 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const coachEmail = settings.coachEmail?.toLowerCase() || "";
+    // Exclude every address this coach records or organizes under, not just
+    // the practice's single coachEmail.
+    const coachEmails = new Set(config.coachEmails);
 
     // Enrich events with full context
     const enrichedEvents = await Promise.all(
       coachingEvents.map(async (event) => {
         const attendeeEmails =
           event.attendees
-            ?.filter((a) => a.email && a.email.toLowerCase() !== coachEmail && !a.resource)
+            ?.filter(
+              (a) => a.email && !coachEmails.has(a.email.toLowerCase()) && !a.resource
+            )
             .map((a) => a.email!.toLowerCase()) ?? [];
 
         let matchedClient: (typeof clients)[number] | null = null;
@@ -100,7 +124,7 @@ export async function GET(request: NextRequest) {
         let actionItems: Array<{ description?: string }> = [];
         if (matchedClient) {
           const lastSession = await prisma.session.findFirst({
-            where: { clientId: matchedClient.id },
+            where: { clientId: matchedClient.id, ...viaClientWhere(coachId) },
             orderBy: { date: "desc" },
             select: { synopsis: true, actionItems: true },
           });
@@ -126,6 +150,7 @@ export async function GET(request: NextRequest) {
               where: {
                 clientId: matchedClient.id,
                 targetSessionDate: { gte: hourBefore, lte: hourAfter },
+                ...viaClientWhere(coachId),
               },
               orderBy: { createdAt: "desc" },
               select: { id: true, content: true },

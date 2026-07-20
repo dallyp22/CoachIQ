@@ -1,11 +1,17 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { CreateGroupButton } from "./actions";
+import { requireCoachPage } from "@/lib/authz-page";
+import { scopeCoachId } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
 
 export default async function BillingGroupsPage() {
+  const coach = await requireCoachPage();
+  const coachId = scopeCoachId(coach);
+
   const groups = await prisma.billingGroup.findMany({
+    where: coachId ? { coachId } : {},
     orderBy: { name: "asc" },
     include: {
       _count: { select: { members: true, invoices: true } },
