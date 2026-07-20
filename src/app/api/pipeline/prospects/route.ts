@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireCoach, scopeCoachId, prospectWhere, authzResponse } from "@/lib/authz";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
 import { STALEST_FIRST } from "@/lib/pipeline/next-activity";
-import { defaultStage, cleanString } from "@/lib/pipeline/stages";
+import { defaultStage, cleanString, readJsonBody } from "@/lib/pipeline/stages";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
@@ -173,7 +173,10 @@ export async function POST(request: NextRequest) {
   }
   const { userId } = await auth();
 
-  const body = await request.json();
+  const body = await readJsonBody(request);
+  if (!body) {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+  }
   const rows: ProspectInput[] = Array.isArray(body?.prospects)
     ? body.prospects
     : Array.isArray(body)
@@ -204,6 +207,37 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // A prospect may only be CREATED into a live, open stage.
+  //
+  // Taking stageId from the body unchecked made this route a second, unguarded
+  // way to set a stage — which is exactly what POST /[id]/stage exists to be the
+  // only one of. Creating straight into the WON stage let convert mint a
+  // billable Client having never written a ProspectStageChange, never audited a
+  // close, and never enforced lostReason; creating into an archived stage
+  // produced a row visible in no stage at all.
+  const openStages = await prisma.pipelineStage.findMany({
+    where: { isArchived: false, terminal: null },
+    select: { id: true },
+  });
+  const openStageIds = new Set(openStages.map((s) => s.id));
+
+  // Same reasoning for the assignee: prospectWhere() matches on
+  // assignedCoachId, so an unvalidated value lets anyone inject a row onto
+  // another coach's board. PATCH already checked this; create did not.
+  const requestedAssignees = new Set(
+    rows.map((r) => cleanString(r.assignedCoachId)).filter((v): v is string => v !== null),
+  );
+  const validAssignees = new Set(
+    requestedAssignees.size === 0
+      ? []
+      : (
+          await prisma.coach.findMany({
+            where: { id: { in: [...requestedAssignees] }, status: { not: "INACTIVE" } },
+            select: { id: true },
+          })
+        ).map((c) => c.id),
+  );
+
   const created: Array<{ id: string; firstName: string; lastName: string }> = [];
   const failed: Array<{ name: string; error: string }> = [];
 
@@ -222,8 +256,22 @@ export async function POST(request: NextRequest) {
     // link-existing-client offer would pair two strangers.
     const email = cleanString(row.email)?.toLowerCase() ?? null;
 
-    const stageId = cleanString(row.stageId) ?? fallbackStage.id;
-    const assignedCoachId = cleanString(row.assignedCoachId);
+    const requestedStage = cleanString(row.stageId);
+    if (requestedStage && !openStageIds.has(requestedStage)) {
+      failed.push({
+        name: `${firstName} ${lastName}`.trim(),
+        error: "That stage is closed or archived — a prospect can only be created in an open stage",
+      });
+      continue;
+    }
+    const stageId = requestedStage ?? fallbackStage.id;
+
+    const requestedAssignee = cleanString(row.assignedCoachId);
+    if (requestedAssignee && !validAssignees.has(requestedAssignee)) {
+      failed.push({ name: `${firstName} ${lastName}`.trim(), error: "Assigned coach not found" });
+      continue;
+    }
+    const assignedCoachId = requestedAssignee;
 
     try {
       const prospect = await prisma.$transaction(async (tx) => {

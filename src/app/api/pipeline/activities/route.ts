@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireCoach, scopeCoachId, canAccessProspect, authzResponse } from "@/lib/authz";
 import { refreshNextActivityAt } from "@/lib/pipeline/next-activity";
-import { cleanString } from "@/lib/pipeline/stages";
+import { cleanString, readJsonBody } from "@/lib/pipeline/stages";
 
 /**
  * POST  /api/pipeline/activities — log something that happened, or plan something
@@ -43,7 +43,10 @@ export async function POST(request: NextRequest) {
     return authzResponse(err);
   }
 
-  const body = await request.json();
+  const body = await readJsonBody(request);
+  if (!body) {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+  }
   const prospectId = cleanString(body?.prospectId);
   if (!prospectId) {
     return NextResponse.json({ error: "prospectId is required" }, { status: 400 });
@@ -105,7 +108,10 @@ export async function PATCH(request: NextRequest) {
     return authzResponse(err);
   }
 
-  const body = await request.json();
+  const body = await readJsonBody(request);
+  if (!body) {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+  }
   const activityId = cleanString(body?.id);
   if (!activityId) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });

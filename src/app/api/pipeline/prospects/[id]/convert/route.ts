@@ -96,6 +96,12 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
   // this resolves to is what both the duplicate check and the create use.
   const targetCoachId = prospect.assignedCoachId ?? prospect.coachId;
 
+  // May the actor see rows in that book? A COACH can own a prospect they have
+  // assigned to someone else, and the duplicate response below names a client
+  // — echoing it would disclose another coach's client record (and hand over a
+  // usable id) to someone who can never otherwise see it.
+  const maySeeTargetBook = scopedCoachId === null || scopedCoachId === targetCoachId;
+
   // (2) No status filter: a CHURNED client still holds the email and still
   // trips the unique index.
   const existingClient = await prisma.client.findFirst({
@@ -103,17 +109,50 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
     select: { id: true, name: true, status: true },
   });
 
+  // Prospect.convertedToClientId is UNIQUE — one client can be the conversion
+  // target of at most one prospect. So if this client is already linked from
+  // another prospect, offering "link to existing" would fail on the prospect
+  // index, not the client one, and the P2002 handler below would report the
+  // wrong cause ("a client was just created") for a collision that is
+  // permanent. Detect it here and say the true thing instead.
+  const alreadyLinked = existingClient
+    ? await prisma.prospect.findFirst({
+        where: { convertedToClientId: existingClient.id, id: { not: id } },
+        select: { id: true, firstName: true, lastName: true },
+      })
+    : null;
+
   if (existingClient && !body?.linkToExistingClientId) {
     // Do not guess. Re-coaching a former client is normal, and so is a typo;
     // the two need opposite outcomes, and only a human knows which.
     return NextResponse.json(
       {
         error: "duplicate_email",
-        message: `${existingClient.name} already exists in this coach's book with that address.`,
-        existingClient,
+        message: !maySeeTargetBook
+          ? "That address is already in use in the assigned coach's book. Ask them to resolve it, or use a different address."
+          : alreadyLinked
+            ? `${existingClient.name} already exists with that address, and is already linked to the prospect "${`${alreadyLinked.firstName} ${alreadyLinked.lastName}`.trim()}". Use a different address, or delete this duplicate prospect.`
+            : `${existingClient.name} already exists in this coach's book with that address.`,
+        // Only offer the link when it can actually succeed AND the actor is
+        // allowed to see the client it names.
+        ...(alreadyLinked || !maySeeTargetBook ? {} : { existingClient }),
       },
       { status: 409 },
     );
+  }
+
+  if (body?.linkToExistingClientId && alreadyLinked) {
+    return NextResponse.json(
+      {
+        error: "already_linked",
+        message: `That client is already linked to another prospect. A client can only be converted from one prospect.`,
+      },
+      { status: 409 },
+    );
+  }
+
+  if (body?.linkToExistingClientId && !maySeeTargetBook) {
+    return NextResponse.json({ error: "Prospect not found" }, { status: 404 });
   }
 
   if (body?.linkToExistingClientId && body.linkToExistingClientId !== existingClient?.id) {
@@ -190,6 +229,20 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
     // check above and the create. The unique index is the real guard; this
     // turns it into the same 409 the pre-check gives.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      // Two different unique indexes can raise here and they mean opposite
+      // things. clients(coachId,email) is the concurrent-convert race and is
+      // retryable; prospects.convertedToClientId means the target client is
+      // already the conversion of another prospect, which no retry fixes.
+      const target = String(err.meta?.target ?? "");
+      if (target.includes("convertedToClientId")) {
+        return NextResponse.json(
+          {
+            error: "already_linked",
+            message: "That client is already linked to another prospect.",
+          },
+          { status: 409 },
+        );
+      }
       return NextResponse.json(
         {
           error: "duplicate_email",

@@ -72,7 +72,6 @@ export function ProspectDossier({
   stages: Stage[];
   coaches: Coach[];
   convertedClient: { id: string; name: string } | null;
-  canEdit: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -253,16 +252,31 @@ export function ProspectDossier({
 function EditableFields({ prospect, coaches }: { prospect: Prospect; coaches: Coach[] }) {
   const router = useRouter();
   const [saving, setSaving] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
+  /**
+   * These fields save on blur, so a rejected write is invisible unless we say
+   * so: router.refresh() repaints the server value and the user's typing just
+   * disappears. An expired session or a deactivated coach would silently
+   * discard every edit.
+   */
   async function save(field: string, value: string | null) {
     setSaving(field);
+    setErr(null);
     try {
-      await fetch(`/api/pipeline/prospects/${prospect.id}`, {
+      const resp = await fetch(`/api/pipeline/prospects/${prospect.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ [field]: value }),
       });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        setErr(data.error ?? "Could not save that change.");
+        return;
+      }
       router.refresh();
+    } catch {
+      setErr("Could not reach the server — that change was not saved.");
     } finally {
       setSaving(null);
     }
@@ -350,7 +364,10 @@ function EditableFields({ prospect, coaches }: { prospect: Prospect; coaches: Co
         />
       </Field>
 
-      {saving && <p className="text-[11px] text-muted">Saving…</p>}
+      <div role="status" aria-live="polite">
+        {saving && <p className="text-[11px] text-muted">Saving…</p>}
+        {err && <p className="text-[11px] text-error">{err}</p>}
+      </div>
     </div>
   );
 }
@@ -572,21 +589,31 @@ function ActivityRow({
   onCompleted: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const isOpenPlan = activity.kind === "PLANNED" && !activity.completedAt;
   const overdue = isOpenPlan && new Date(activity.activityAt) < startOfToday();
 
   async function complete() {
     setBusy(true);
+    setErr(null);
     try {
-      await fetch("/api/pipeline/activities", {
+      const resp = await fetch("/api/pipeline/activities", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: activity.id, completed: true }),
       });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        setErr(data.error ?? "Could not mark that done.");
+        return;
+      }
       onChanged();
-      // Completing one plan is the moment to make the next — the whole cadence
-      // depends on never leaving a prospect with nothing scheduled.
+      // Only after the write actually landed. Prompting for the next activity
+      // off a failed complete has the user scheduling follow-ups on a timeline
+      // the server never recorded.
       onCompleted();
+    } catch {
+      setErr("Could not reach the server.");
     } finally {
       setBusy(false);
     }
@@ -594,9 +621,17 @@ function ActivityRow({
 
   async function remove() {
     setBusy(true);
+    setErr(null);
     try {
-      await fetch(`/api/pipeline/activities?id=${activity.id}`, { method: "DELETE" });
+      const resp = await fetch(`/api/pipeline/activities?id=${activity.id}`, { method: "DELETE" });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        setErr(data.error ?? "Could not delete that entry.");
+        return;
+      }
       onChanged();
+    } catch {
+      setErr("Could not reach the server.");
     } finally {
       setBusy(false);
     }
@@ -627,6 +662,11 @@ function ActivityRow({
         <p className="text-sm text-foreground mt-1 whitespace-pre-wrap break-words">
           {activity.notes || <span className="text-muted">No notes</span>}
         </p>
+        {err && (
+          <p className="text-xs text-error mt-1" role="status" aria-live="polite">
+            {err}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
@@ -840,12 +880,14 @@ function PlanNextModal({
   const [when, setWhen] = useState(inDays(7));
   const [ownerId, setOwnerId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
+    setErr(null);
     try {
-      await fetch("/api/pipeline/activities", {
+      const resp = await fetch("/api/pipeline/activities", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -856,7 +898,17 @@ function PlanNextModal({
           ...(ownerId ? { ownerId } : {}),
         }),
       });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        setErr(data.error ?? "Could not schedule that.");
+        return;
+      }
+      // Only close on success. Closing on failure tells the user the follow-up
+      // is booked when nothing was written — and this prompt is the entire
+      // mechanism keeping a manual process alive.
       onDone();
+    } catch {
+      setErr("Could not reach the server.");
     } finally {
       setBusy(false);
     }
@@ -904,6 +956,7 @@ function PlanNextModal({
             </Field>
           )}
         </div>
+        {err && <p className="text-sm text-error">{err}</p>}
         <div className="flex justify-end gap-2 pt-2">
           <button
             type="button"

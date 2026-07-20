@@ -120,7 +120,6 @@ export default async function ProspectPage({ params }: { params: Promise<{ id: s
         stages={stages}
         coaches={coaches}
         convertedClient={convertedClient}
-        canEdit={canAccessProspect(coachId, prospect)}
       />
     </div>
   );

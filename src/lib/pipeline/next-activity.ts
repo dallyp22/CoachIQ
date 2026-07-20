@@ -37,11 +37,22 @@ export async function refreshNextActivityAt(
   tx: Prisma.TransactionClient,
   prospectId: string
 ): Promise<Date | null> {
-  const next = await tx.pipelineActivity.findFirst({
-    where: { prospectId, kind: "PLANNED", completedAt: null },
-    orderBy: { activityAt: "asc" },
-    select: { activityAt: true },
+  // Stage-aware on purpose. A closed prospect can still carry a dangling future
+  // plan, so a stage-blind recompute would re-arm it: deleting an unrelated
+  // activity, or just editing a note, would put a date back on a won deal and
+  // resume the overdue-amber nagging that closing it was supposed to stop.
+  const prospect = await tx.prospect.findUnique({
+    where: { id: prospectId },
+    select: { stage: { select: { terminal: true } } },
   });
+
+  const next = prospect?.stage.terminal
+    ? null
+    : await tx.pipelineActivity.findFirst({
+        where: { prospectId, kind: "PLANNED", completedAt: null },
+        orderBy: { activityAt: "asc" },
+        select: { activityAt: true },
+      });
 
   const value = next?.activityAt ?? null;
   await tx.prospect.update({

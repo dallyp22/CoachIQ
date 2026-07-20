@@ -8,7 +8,7 @@ import {
   authzResponse,
 } from "@/lib/authz";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
-import { cleanString } from "@/lib/pipeline/stages";
+import { cleanString, readJsonBody } from "@/lib/pipeline/stages";
 
 /**
  * GET / PATCH / DELETE a single prospect — the dossier (PRD §6.3).
@@ -108,7 +108,10 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
   const existing = await loadProspect(id, coachId);
   if (!existing) return NextResponse.json({ error: "Prospect not found" }, { status: 404 });
 
-  const body = await request.json();
+  const body = await readJsonBody(request);
+  if (!body) {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+  }
 
   // Stage is deliberately NOT editable here — it moves through
   // POST /[id]/stage, which writes history, resets stageEnteredAt, and

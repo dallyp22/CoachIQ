@@ -249,4 +249,144 @@ describe.skipIf(!ENABLED)("Prospect.nextActivityAt maintenance", () => {
       expect(order.indexOf(overdue.id)).toBeLessThan(order.indexOf(prospectId));
     });
   });
+
+  /**
+   * Regression tests for two bugs the pre-merge review found. Both were SILENT —
+   * no error, just a wrong sort order — which is exactly why neither was caught
+   * by the original suite.
+   */
+  describe("stage-awareness regressions (found in pre-merge review)", () => {
+    it("recomputes when a CLOSED prospect is reopened", async () => {
+      // The bug: the terminal branch cleared nextActivityAt with no else, so
+      // reopening left it null forever while real planned activities sat
+      // underneath. The row claimed "none scheduled" at the top of the
+      // stalest-first list while its own dossier showed a booked call.
+      await plan("2026-08-01T15:00:00.000Z");
+      await stageRoute.POST(
+        jsonReq({ stageId: lostStageId, lostReason: "Budget cut" }),
+        params(prospectId),
+      );
+      expect(await nextOf()).toBeNull();
+
+      await stageRoute.POST(jsonReq({ stageId: openStageId }), params(prospectId));
+      expect((await nextOf())?.toISOString()).toBe("2026-08-01T15:00:00.000Z");
+    });
+
+    it("does NOT re-arm a closed prospect when an unrelated activity is touched", async () => {
+      // The mirror bug: refreshNextActivityAt was stage-blind, so ANY later
+      // activity mutation — even deleting a different activity — put a date back
+      // on a won deal and resumed the overdue nagging that closing it stopped.
+      await plan("2026-08-01T15:00:00.000Z");
+      const other = await (await plan("2026-09-01T15:00:00.000Z")).json();
+
+      await stageRoute.POST(jsonReq({ stageId: wonStageId }), params(prospectId));
+      expect(await nextOf()).toBeNull();
+
+      await activitiesRoute.DELETE(
+        new NextRequest(`http://localhost/x?id=${other.activity.id}`, { method: "DELETE" }) as never,
+      );
+      expect(await nextOf()).toBeNull();
+
+      await activitiesRoute.POST(
+        jsonReq({ prospectId, kind: "PLANNED", activityAt: "2026-10-01T15:00:00.000Z" }),
+      );
+      expect(await nextOf()).toBeNull();
+    });
+  });
+
+  describe("stage-move guards (found untested in pre-merge review)", () => {
+    it("refuses a move to a lost stage with no reason, and does not move the prospect", async () => {
+      const before = await prisma.prospect.findUnique({ where: { id: prospectId } });
+      const res = await stageRoute.POST(jsonReq({ stageId: lostStageId }), params(prospectId));
+      expect(res.status).toBe(400);
+      const after = await prisma.prospect.findUnique({ where: { id: prospectId } });
+      expect(after?.stageId).toBe(before?.stageId);
+    });
+
+    it("refuses a whitespace-only reason", async () => {
+      const res = await stageRoute.POST(
+        jsonReq({ stageId: lostStageId, lostReason: "   " }),
+        params(prospectId),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("clears a stale lostReason when the prospect is reopened", async () => {
+      await stageRoute.POST(
+        jsonReq({ stageId: lostStageId, lostReason: "Went with a competitor" }),
+        params(prospectId),
+      );
+      await stageRoute.POST(jsonReq({ stageId: openStageId }), params(prospectId));
+      const after = await prisma.prospect.findUnique({ where: { id: prospectId } });
+      expect(after?.lostReason).toBeNull();
+    });
+
+    it("treats a move to the current stage as unchanged and writes no history row", async () => {
+      const current = (await prisma.prospect.findUnique({ where: { id: prospectId } }))!.stageId;
+      const before = await prisma.prospectStageChange.count({ where: { prospectId } });
+      const res = await stageRoute.POST(jsonReq({ stageId: current }), params(prospectId));
+      expect(res.status).toBe(200);
+      expect((await res.json()).status).toBe("unchanged");
+      expect(await prisma.prospectStageChange.count({ where: { prospectId } })).toBe(before);
+    });
+
+    it("rejects a malformed request body with 400, not 500", async () => {
+      const bad = new NextRequest("http://localhost/x", {
+        method: "POST",
+        body: "not json at all",
+        headers: { "content-type": "application/json" },
+      } as never) as never;
+      const res = await stageRoute.POST(bad, params(prospectId));
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("POST /prospects stage validation (found in pre-merge review)", () => {
+    it("refuses to create a prospect directly in a TERMINAL stage", async () => {
+      // The worst finding of the review: creating straight into WON let convert
+      // mint a billable Client without ever passing the stage route — no history,
+      // no audit, no lostReason enforcement.
+      const res = await prospectsRoute.POST(
+        jsonReq({ firstName: "Sneaky", lastName: "Win", stageId: wonStageId }),
+      );
+      const body = await res.json();
+      expect(body.created).toHaveLength(0);
+      expect(await prisma.prospect.count({ where: { firstName: "Sneaky" } })).toBe(0);
+    });
+
+    it("refuses to create a prospect in an ARCHIVED stage", async () => {
+      const spare = await prisma.pipelineStage.create({
+        data: { name: "Spare (test)", sortOrder: 99, isArchived: true, updatedAt: new Date() },
+        select: { id: true },
+      });
+      const res = await prospectsRoute.POST(
+        jsonReq({ firstName: "Hidden", lastName: "Row", stageId: spare.id }),
+      );
+      const body = await res.json();
+      expect(body.created).toHaveLength(0);
+      expect(await prisma.prospect.count({ where: { firstName: "Hidden" } })).toBe(0);
+      await prisma.pipelineStage.delete({ where: { id: spare.id } });
+    });
+
+    it("refuses an unknown assignedCoachId instead of injecting onto a real board", async () => {
+      const res = await prospectsRoute.POST(
+        jsonReq({
+          firstName: "Injected",
+          lastName: "Row",
+          assignedCoachId: "00000000-0000-0000-0000-000000000000",
+        }),
+      );
+      const body = await res.json();
+      expect(body.created).toHaveLength(0);
+      expect(await prisma.prospect.count({ where: { firstName: "Injected" } })).toBe(0);
+    });
+
+    it("still accepts a valid open stage", async () => {
+      const res = await prospectsRoute.POST(
+        jsonReq({ firstName: "Normal", lastName: "Lead", stageId: openStageId }),
+      );
+      expect(res.status).toBe(201);
+      expect(await prisma.prospect.count({ where: { firstName: "Normal" } })).toBe(1);
+    });
+  });
 });

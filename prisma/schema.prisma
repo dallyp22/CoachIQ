@@ -466,6 +466,17 @@ model BillingAuditLog {
 /// migration — Settings exposes rename / reorder / isHot only. Adding,
 /// deleting, or re-marking a stage terminal is deliberately NOT editable:
 /// those are the operations that can strand the convert-to-client rule.
+///
+/// ⚠ RAW-SQL-MANAGED INDEX — DO NOT ACCEPT A DROP.
+/// `pipeline_stages_one_live_per_terminal` is a PARTIAL unique index created in
+/// 20260719_pipeline_module/migration.sql:
+///     UNIQUE ("terminal") WHERE "terminal" IS NOT NULL AND "isArchived" = false
+/// Prisma cannot express partial indexes, so the differ does not see it and
+/// WILL propose `DROP INDEX pipeline_stages_one_live_per_terminal` on the next
+/// `prisma migrate dev`. Accepting that silently removes the invariant that
+/// makes convert-to-client safe (exactly one live WON and one live LOST stage),
+/// allowing two WON stages and breaking the convert rule with no error.
+/// Same hazard class as transcripts.embedding / transcripts.search_text below.
 model PipelineStage {
   id         String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name       String

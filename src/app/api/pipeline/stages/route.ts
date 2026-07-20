@@ -3,7 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { requireCoach, authzResponse } from "@/lib/authz";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
-import { liveStages, canArchiveStage, cleanString } from "@/lib/pipeline/stages";
+import { liveStages, canArchiveStage, cleanString, readJsonBody } from "@/lib/pipeline/stages";
 
 /**
  * GET   /api/pipeline/stages — the board's columns (any coach; they populate dropdowns)
@@ -45,7 +45,10 @@ export async function PATCH(request: NextRequest) {
   }
   const { userId } = await auth();
 
-  const body = await request.json();
+  const body = await readJsonBody(request);
+  if (!body) {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+  }
   const patches: StagePatch[] = Array.isArray(body?.stages) ? body.stages : [body];
 
   if (patches.length === 0) {
@@ -89,6 +92,31 @@ export async function PATCH(request: NextRequest) {
         const verdict = await canArchiveStage(id);
         if (!verdict.ok) {
           return NextResponse.json({ error: verdict.reason }, { status: 409 });
+        }
+      } else {
+        // UN-archiving needs its own guard. Restoring an archived terminal
+        // stage while a live one of the same outcome exists violates the
+        // partial unique index — previously an uncaught P2002, i.e. a 500 that
+        // also discarded every other stage in the same batch, since the whole
+        // PATCH is one transaction and the UI submits all dirty rows together.
+        const stageRow = await prisma.pipelineStage.findUnique({
+          where: { id },
+          select: { terminal: true, isArchived: true, name: true },
+        });
+        if (stageRow?.isArchived && stageRow.terminal) {
+          const liveSibling = await prisma.pipelineStage.count({
+            where: { terminal: stageRow.terminal, isArchived: false, id: { not: id } },
+          });
+          if (liveSibling > 0) {
+            return NextResponse.json(
+              {
+                error:
+                  `Cannot restore "${stageRow.name}" — another ${stageRow.terminal} stage is already active. ` +
+                  `Archive that one first.`,
+              },
+              { status: 409 },
+            );
+          }
         }
       }
       data.isArchived = archiving;

@@ -3,8 +3,8 @@ import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { requireCoach, scopeCoachId, canAccessProspect, authzResponse } from "@/lib/authz";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
-import { clearNextActivityAt } from "@/lib/pipeline/next-activity";
-import { cleanString } from "@/lib/pipeline/stages";
+import { clearNextActivityAt, refreshNextActivityAt } from "@/lib/pipeline/next-activity";
+import { cleanString, readJsonBody } from "@/lib/pipeline/stages";
 
 /**
  * POST /api/pipeline/prospects/[id]/stage — move a prospect (PRD §6.5).
@@ -31,7 +31,10 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
   const { userId } = await auth();
 
   const { id } = await ctx.params;
-  const body = await request.json();
+  const body = await readJsonBody(request);
+  if (!body) {
+    return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+  }
   const toStageId = cleanString(body?.stageId);
   if (!toStageId) {
     return NextResponse.json({ error: "stageId is required" }, { status: 400 });
@@ -106,8 +109,16 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
 
     // A closed prospect must stop nagging. Left set, a dangling future planned
     // activity keeps it eligible for the overdue-amber state of §6.2.
+    //
+    // The else is load-bearing: REOPENING a closed prospect has to recompute,
+    // or the column stays null while real planned activities sit underneath it.
+    // The row would then claim "none scheduled" at the top of the stalest-first
+    // list while its own dossier shows a booked call — silently, with no error,
+    // until someone happened to touch an activity on it.
     if (toStage.terminal) {
       await clearNextActivityAt(tx, id);
+    } else {
+      await refreshNextActivityAt(tx, id);
     }
 
     await logEvent(tx, {

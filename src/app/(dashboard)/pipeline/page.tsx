@@ -175,7 +175,7 @@ export default async function PipelinePage({
                       </td>
                       <td className="px-5 py-4 text-sm text-muted hidden xl:table-cell">
                         {p.assignedCoach?.name ?? (
-                          <span className="text-muted/70">Unassigned</span>
+                          <span className="text-muted">Unassigned</span>
                         )}
                       </td>
                     </tr>

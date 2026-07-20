@@ -117,3 +117,20 @@ export async function canArchiveStage(stageId: string): Promise<ArchiveOk | Arch
 export function cleanString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
+
+/**
+ * Parse a JSON request body without turning a malformed one into a 500.
+ *
+ * `await request.json()` throws on an empty or non-JSON body, and an unhandled
+ * throw in a route handler is a 500 — reporting a client-side validation
+ * failure as a server fault, and polluting any alerting keyed on 5xx rates.
+ */
+export async function readJsonBody(request: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const body = await request.json();
+    if (body === null || typeof body !== "object") return null;
+    return body as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
