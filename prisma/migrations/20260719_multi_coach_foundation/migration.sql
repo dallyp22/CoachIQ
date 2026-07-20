@@ -108,18 +108,21 @@ SELECT
     'OWNER', 'ACTIVE', 'OK', 'OK', false, 300, CURRENT_TIMESTAMP
 WHERE NOT EXISTS (SELECT 1 FROM "coaches" WHERE "role" = 'OWNER');
 
--- Dallas keeps access the moment requireCoach starts enforcing. Without this
--- seed, everyone except Todd hits the no-access screen on deploy — Clerk auth
--- is presence-only today, so several accounts currently work.
+-- Dallas keeps access the moment requireCoach starts enforcing. Without these
+-- seeds, everyone except Todd hits the no-access screen on deploy — Clerk auth
+-- is presence-only today, so every existing account currently works.
+--
+-- Both addresses are verified against the live Clerk user list (2026-07-19):
+-- admin-one@example.com and admin-two@example.com are real accounts
+-- that can sign in today. Seeding only one would lock the other out.
 -- Joel and other management are added through the Add Coach flow (role ADMIN).
 INSERT INTO "coaches" (
     "name", "loginEmail", "role", "status",
     "inviteStatus", "fathomStatus", "calendarSyncEnabled", "updatedAt"
 )
-VALUES (
-    'Practice Admin One', 'admin-one@example.com', 'ADMIN', 'ACTIVE',
-    'OK', 'OK', false, CURRENT_TIMESTAMP
-)
+VALUES
+    ('Practice Admin One', 'admin-one@example.com', 'ADMIN', 'ACTIVE', 'OK', 'OK', false, CURRENT_TIMESTAMP),
+    ('Practice Admin Two', 'admin-two@example.com', 'ADMIN', 'ACTIVE', 'OK', 'OK', false, CURRENT_TIMESTAMP)
 ON CONFLICT ("loginEmail") DO NOTHING;
 
 -- ─── 3. Coach ownership on clients ────────────────────
