@@ -73,14 +73,42 @@ export async function POST(request: NextRequest) {
   }
 
   // Every group belongs to exactly one coach, and every member client must
-  // share it (enforced at member-add). A coach creating a group owns it —
-  // attributing it to the practice owner would make the group invisible to
-  // its creator and reject their own clients as members. OWNER/ADMIN may
-  // create one on another coach's behalf by naming them.
-  const coachId =
-    actingCoach.role !== "COACH" && typeof body.coachId === "string" && body.coachId
-      ? body.coachId
-      : actingCoach.id;
+  // share it (enforced at member-add).
+  //
+  // A COACH creating a group owns it — attributing it elsewhere would make
+  // the group invisible to its creator and reject their own clients.
+  //
+  // An ADMIN is different: admins administer other people's books and
+  // typically own no clients themselves. Defaulting a group to the acting
+  // admin produced a group with an empty member list that rejected every
+  // client in the practice. So an admin's group goes to the named coach, or
+  // to the practice owner as the primary book.
+  let coachId = actingCoach.id;
+  if (actingCoach.role !== "COACH") {
+    if (typeof body.coachId === "string" && body.coachId) {
+      const target = await prisma.coach.findUnique({
+        where: { id: body.coachId },
+        select: { id: true },
+      });
+      if (!target) {
+        return NextResponse.json({ error: "Coach not found" }, { status: 404 });
+      }
+      coachId = target.id;
+    } else {
+      const owner = await prisma.coach.findFirst({
+        where: { role: "OWNER" },
+        orderBy: { createdAt: "asc" },
+        select: { id: true },
+      });
+      if (!owner) {
+        return NextResponse.json(
+          { error: "No practice owner exists to attribute this group to" },
+          { status: 400 },
+        );
+      }
+      coachId = owner.id;
+    }
+  }
 
   const group = await prisma.$transaction(async (tx) => {
     const created = await tx.billingGroup.create({
