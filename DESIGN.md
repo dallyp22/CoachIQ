@@ -35,7 +35,8 @@
 - **Accent:** #B45309 (Amber 700) — warm amber-gold. Confident, not flashy. Used for active states, CTAs, important markers.
 - **Accent hover:** #92400E (Amber 800)
 - **Accent light:** #FEF3C7 (Amber 100) — for highlights, tags, search result marks
-- **Semantic:** success #16A34A, warning #CA8A04, error #DC2626, info #2563EB
+- **Semantic (light):** success #16A34A, warning #CA8A04, error #DC2626, info #2563EB
+- **Semantic (dark):** success #4ADE80, warning #FACC15, error #F87171, info #60A5FA — one step lighter, mirroring how the accent shifts. Always reference these through the `--success` / `--warning` / `--error` / `--info` tokens (`text-error`, `bg-success/10`), never as literal hexes, or they will not shift with the theme.
 - **Dark mode:** Background #0C0A09 (Stone 950), Surface #1C1917, Borders #292524, Accent #D97706 (reduce saturation ~15%). Sidebar stays dark. Alert colors shift to dark-friendly variants.
 
 ## Spacing
@@ -73,3 +74,4 @@
 | 2026-03-28 | Amber accent over purple/teal | Every competitor uses cool-toned accents. Amber is distinctive, warm, and signals intelligence/expertise. |
 | 2026-03-28 | Split-pane dossier layout | Subagent proposed "Analyst's Notebook" concept. Adopted the dossier structure but warmed it for an executive coach audience. |
 | 2026-03-28 | Instrument Serif for display | Editorial authority without being stuffy. Pairs well with DM Sans body and Geist Mono data. |
+| 2026-07-19 | Dark-mode alert color values fixed | The system said alert colors "shift to dark-friendly variants" but never defined them, so light-mode values rendered unchanged on the dark surface. Measured against #1C1917: error 3.62:1 and info 3.38:1, both under the 4.5:1 minimum for body text. Chose the one-step-lighter variants (6.32:1 and 6.88:1). Success and warning already passed but shift too, so the four behave as one set. |

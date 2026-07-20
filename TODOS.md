@@ -176,6 +176,15 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 **Fix path:** Store the calendar event ID on PrepBrief, dedup on it, and add a unique constraint (mirrors the Session.calendarEventId pattern); regenerate on event-time change; set delivered only when the brief is actually surfaced.
 **Added:** 2026-07-06 via /ship (adversarial review, finding 10); expanded 2026-07-19.
 
+## Design System Follow-ups
+
+### Chart colors don't follow the theme
+**Priority:** P3
+**What:** `src/components/client-insights.tsx` passes literal hexes (`#16A34A`, `#2563EB`) to Recharts for line/area/sparkline colors. Recharts takes color values, not CSS classes, so these can't use the semantic tokens the rest of the app now uses — they stay light-mode green and blue on the dark surface.
+**Why:** Dark mode is reachable and automatic (`theme-toggle.tsx` honors `prefers-color-scheme` on first load), so anyone with a dark OS sees charts that don't match the surrounding UI.
+**Fix path:** Read the resolved token values at runtime (`getComputedStyle(document.documentElement).getPropertyValue('--success')`) and pass those to Recharts, re-reading on theme change; or define a small chart palette with explicit light/dark pairs.
+**Added:** 2026-07-19 via /plan-design-review follow-up sweep.
+
 ## Multi-Coach Follow-ups (from 2026-07-19 plan-eng-review; foundation not yet built)
 
 ### No way to create a client in the product — blocks Kurt onboarding

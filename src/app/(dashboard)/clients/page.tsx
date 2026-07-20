@@ -130,12 +130,17 @@ export default async function ClientsPage() {
   );
 }
 
+/**
+ * Semantic tokens rather than fixed hexes: the tokens shift on dark surfaces,
+ * so these badges follow the theme instead of staying light-mode green on a
+ * near-black table.
+ */
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
-    ACTIVE: "bg-[#F0FDF4] text-[#166534] border-[#BBF7D0]",
-    PAUSED: "bg-[#FEFCE8] text-[#854D0E] border-[#FEF08A]",
-    CHURNED: "bg-[#FEF2F2] text-[#991B1B] border-[#FECACA]",
-    PROSPECT: "bg-[#EFF6FF] text-[#1E40AF] border-[#BFDBFE]",
+    ACTIVE: "bg-success/10 text-success border-success/25",
+    PAUSED: "bg-warning/10 text-warning border-warning/25",
+    CHURNED: "bg-error/10 text-error border-error/25",
+    PROSPECT: "bg-info/10 text-info border-info/25",
   };
 
   return (
