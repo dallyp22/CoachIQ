@@ -25,6 +25,24 @@ enum BillingCadence {
   CUSTOM_DAYS
 }
 
+enum CoachRole {
+  OWNER // Todd — everything, including the billing Danger Zone
+  ADMIN // Joel / mgmt — practice-wide visibility + coach management
+  COACH // sees only their own clients and data
+}
+
+enum CoachStatus {
+  INVITED // row exists, Clerk invite sent, not yet signed in
+  ACTIVE
+  INACTIVE // soft-removed; historical rows keep their FK
+}
+
+enum StepStatus {
+  PENDING
+  OK
+  FAILED
+}
+
 enum MeetingCadence {
   WEEKLY
   BIWEEKLY
@@ -79,11 +97,93 @@ enum JobStatus {
 
 // ─── MODELS ───────────────────────────────────────────
 
+// ─── COACHES ──────────────────────────────────────────
+
+/// One row per person with an account. The practice-wide config that is NOT
+/// per-coach (Stripe, AI keys, invoice numbering) stays on CoachSettings.
+///
+///   Fathom webhook ──► routed by workEmails ──► HMAC vs THIS coach's secret
+///   Calendar sync   ──► googleCalendarId (shared service account)
+///   Drive writes    ──► driveRootFolderId (folder in the coach's OWN Drive)
+///
+/// `status` gates LOGIN linking only — the data pipes above run for any
+/// non-INACTIVE coach whose integrations are configured, so a coach's first
+/// test recording works minutes after Add Coach, before they ever sign in.
+model Coach {
+  id                  String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String
+  /// Clerk invite + login target.
+  loginEmail          String      @unique
+  /// Addresses the coach records/organizes meetings under. Used to route
+  /// incoming recordings and to exclude the coach when picking the client
+  /// attendee. Often differs from loginEmail.
+  workEmails          String[]    @default([])
+  /// Stamped on first sign-in from the Clerk invitation's public_metadata.
+  clerkUserId         String?     @unique
+  role                CoachRole   @default(COACH)
+  status              CoachStatus @default(INVITED)
+  /// Per-step Add Coach outcomes, so a half-created coach is visible and
+  /// retryable instead of silently inert.
+  inviteStatus        StepStatus  @default(PENDING)
+  fathomStatus        StepStatus  @default(PENDING)
+  /// Encrypted at rest via src/lib/secrets.ts — never read these columns
+  /// directly, go through decryptOptional().
+  fathomApiKey        String?
+  fathomWebhookSecret String?
+  googleCalendarId    String?
+  /// Regex, validated at save time. Null falls back to the practice default.
+  coachingTitleFilter String?
+  calendarSyncEnabled Boolean     @default(true)
+  /// Folder in the coach's OWN Drive, shared to the app's Drive identity and
+  /// pinned by ID — never resolved by name (name lookup collides when two
+  /// coaches have a same-named client).
+  driveRootFolderId   String?
+  /// Dollars, matching every other money column. Applies as the pre-fill when
+  /// a CLIENT is created; invoice rates freeze onto TimeEntry at session time.
+  defaultHourlyRate   Decimal?    @db.Decimal(10, 2)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  clients           Client[]
+  billingGroups     BillingGroup[]
+  pendingRecordings PendingRecording[]
+
+  @@index([status])
+  @@map("coaches")
+}
+
+/// A recording that verified against a coach's webhook secret but matched no
+/// client. Today these were a Drive drop plus a console.warn; with per-coach
+/// Drive roots the owner would have to spelunk N different Drives to find
+/// them, so the row is the reviewable record and the Drive file is the payload.
+model PendingRecording {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  coachId           String    @db.Uuid
+  fathomRecordingId String
+  inviteeEmails     String[]  @default([])
+  driveFileId       String?
+  title             String?
+  recordedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  resolvedAt        DateTime?
+
+  coach Coach @relation(fields: [coachId], references: [id])
+
+  @@unique([coachId, fathomRecordingId])
+  @@index([coachId, resolvedAt])
+  @@map("pending_recordings")
+}
+
+// ─── CLIENTS ──────────────────────────────────────────
+
 model Client {
   id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  coachId             String         @db.Uuid
   name                String
   displayName         String?
-  email               String         @unique
+  /// Unique per coach, not globally: two coaches may legitimately serve the
+  /// same person, and recording→client matching is coach-scoped.
+  email               String
   secondaryEmails     String[]       @default([])
   phone               String?
   company             String?
@@ -117,16 +217,23 @@ model Client {
   invoices     Invoice[]
   prepBriefs   PrepBrief[]
   billingGroup BillingGroup? @relation(fields: [billingGroupId], references: [id])
+  coach        Coach         @relation(fields: [coachId], references: [id])
 
+  @@unique([coachId, email])
   @@index([status])
   @@index([email])
+  @@index([coachId])
   @@index([nextInvoiceDueAt])
   @@index([billingGroupId])
   @@map("clients")
 }
 
+/// Every member client must belong to the group's coach — enforced at
+/// member-add. Without a coach on the group, a group invoice (which has no
+/// single client) has no owner, and coach-scoped invoice lists drop it.
 model BillingGroup {
   id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  coachId             String         @db.Uuid
   name                String
   displayName         String?
   billingContactName  String?
@@ -151,8 +258,10 @@ model BillingGroup {
 
   members  Client[]
   invoices Invoice[]
+  coach    Coach     @relation(fields: [coachId], references: [id])
 
   @@index([status])
+  @@index([coachId])
   @@index([nextInvoiceDueAt])
   @@map("billing_groups")
 }
@@ -198,8 +307,14 @@ model Transcript {
   topics         String[] @default([])
   createdAt      DateTime @default(now())
 
-  // pgvector embedding stored via raw SQL (Prisma doesn't natively support vector type)
-  // Column: embedding vector(1536) — managed via migration SQL
+  // Declared so Prisma SEES these columns and leaves them alone. They are
+  // created and maintained by raw SQL in 20260329024112_add_pgvector_embedding
+  // (embedding is ivfflat-indexed; search_text is GENERATED ALWAYS from
+  // fullText). Before this declaration, `prisma migrate dev` diffed them as
+  // drift and proposed DROPping 602+ rows of embeddings. Never write to these
+  // through the Prisma client — they are raw-SQL territory.
+  embedding   Unsupported("vector(1536)")?
+  search_text Unsupported("tsvector")?
 
   session Session @relation(fields: [sessionId], references: [id])
   client  Client  @relation(fields: [clientId], references: [id])

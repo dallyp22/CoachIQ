@@ -21,10 +21,20 @@ async function main() {
   });
   const prisma = new PrismaClient({ adapter });
 
-  let client = await prisma.client.findUnique({ where: { email: EMAIL } });
+  const owner = await prisma.coach.findFirst({
+    where: { role: "OWNER" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (!owner) throw new Error("No OWNER coach — run the multi-coach migration first.");
+
+  let client = await prisma.client.findUnique({
+    where: { coachId_email: { coachId: owner.id, email: EMAIL } },
+  });
   if (!client) {
     client = await prisma.client.create({
       data: {
+        coachId: owner.id,
         name: NAME,
         email: EMAIL,
         hourlyRate: new Decimal(100),

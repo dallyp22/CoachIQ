@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { logEvent, BillingEvent } from "@/lib/billing/audit";
+import { getOwnerCoachId } from "@/lib/coach";
 import { Decimal } from "@prisma/client/runtime/client";
 
 /**
@@ -58,9 +59,15 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Every group belongs to exactly one coach, and every member client must
+  // share it (enforced at member-add). Phase 2 swaps this for the signed-in
+  // coach from requireCoach().
+  const coachId = await getOwnerCoachId();
+
   const group = await prisma.$transaction(async (tx) => {
     const created = await tx.billingGroup.create({
       data: {
+        coachId,
         name: body.name.trim(),
         displayName: body.displayName?.trim() || null,
         billingContactName: body.billingContactName?.trim() || null,

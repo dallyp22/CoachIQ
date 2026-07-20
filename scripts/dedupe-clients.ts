@@ -78,7 +78,10 @@ async function resolveClient(prisma: PrismaClient, identifier: string) {
   if (looksLikeUuid) {
     return prisma.client.findUnique({ where: { id: identifier } });
   }
-  return prisma.client.findUnique({
+  // findFirst, not findUnique: client email is unique per coach now, so an
+  // email alone can match more than one row. This maintenance script is run
+  // interactively against a known duplicate — pass the id to disambiguate.
+  return prisma.client.findFirst({
     where: { email: identifier.toLowerCase() },
   });
 }
