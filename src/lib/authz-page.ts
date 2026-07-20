@@ -14,9 +14,14 @@ export async function requireCoachPage(minRole: CoachRole = "COACH"): Promise<Re
   try {
     return await requireCoach(minRole);
   } catch (err) {
-    if (err instanceof AuthzError && err.code === "unauthenticated") {
-      redirect("/sign-in");
+    if (err instanceof AuthzError) {
+      redirect(err.code === "unauthenticated" ? "/sign-in" : "/no-access");
     }
-    redirect("/no-access");
+    // Anything else — a database outage, a Clerk timeout — is an
+    // infrastructure failure, not an authorization decision. Re-throw so the
+    // error boundary handles it. Swallowing it here would tell every user at
+    // once that they are not a coach, and this call sits in the dashboard
+    // layout, so that message would cover the entire app.
+    throw err;
   }
 }

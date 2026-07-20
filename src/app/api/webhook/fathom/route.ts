@@ -34,7 +34,16 @@ import { filterCoachingEvents } from "@/lib/google-calendar";
 export async function POST(request: NextRequest) {
   const payload = await request.arrayBuffer();
   const payloadBytes = Buffer.from(payload);
-  const body = JSON.parse(payloadBytes.toString());
+  // Parsed before auth because routing needs recorded_by, so it must not
+  // throw: an anonymous malformed POST should be a 400, not a 500. Shape is
+  // whatever Fathom sent, so it stays untyped here and is narrowed at use.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try {
+    body = JSON.parse(payloadBytes.toString());
+  } catch {
+    return NextResponse.json({ error: "Malformed JSON body" }, { status: 400 });
+  }
 
   // 1. Identify and authenticate the sending coach.
   const sigHeaders = readSignatureHeaders(request.headers);

@@ -99,6 +99,18 @@ describe("coach scoping enforcement", () => {
     }
   });
 
+  it("the dashboard layout gate exists — two PUBLIC exemptions depend on it", () => {
+    // Those exemptions say "gated by the dashboard layout". Without this
+    // assertion, deleting that call leaves every test green while the stated
+    // reason silently becomes false.
+    const layout = files.find((f) => f.rel === "(dashboard)/layout.tsx");
+    expect(layout, "(dashboard)/layout.tsx is missing").toBeDefined();
+    expect(
+      layout!.source.includes("requireCoachPage"),
+      "The dashboard layout no longer resolves a coach, but PUBLIC exemptions still claim it does"
+    ).toBe(true);
+  });
+
   it("dashboard pages use the redirecting helper, not the API-flavoured one", () => {
     const wrong = files
       .filter((f) => f.rel.startsWith("(dashboard)/") && isSurface(f) && !PUBLIC[f.rel])
@@ -117,6 +129,7 @@ describe("coach scoping enforcement", () => {
     const PRACTICE_WIDE = [
       "@/lib/billing/generate",
       "@/lib/calendar-sync",
+      "@/lib/deliver-briefs",
     ];
     const offenders = files
       .filter(isSurface)

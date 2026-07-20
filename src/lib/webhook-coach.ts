@@ -137,8 +137,18 @@ export async function resolveWebhookCoach(
     if (secret && verifySignature(payload, headers, secret)) {
       return { ok: true, coach: strip(sender), matchedBy: "sender" };
     }
-    // Named failure — the actionable case: this coach's secret is wrong,
-    // rotated, or was re-registered without updating the stored value.
+    // No usable secret is a different failure from a secret that did not
+    // verify. It means the stored value could not be decrypted — a
+    // COACHIQ_SECRETS_KEY that differs from the one the backfill ran under.
+    // Returning the named failure here would drop every one of this coach's
+    // recordings permanently, which is exactly what the env fallback exists
+    // to prevent, on the path their recordings actually take.
+    if (!secret) {
+      const legacy = await legacyEnvFallback(payload, headers);
+      if (legacy) return { ok: true, coach: legacy, matchedBy: "fallback" };
+    }
+    // The secret decrypted and simply did not match: wrong, rotated, or
+    // re-registered without updating the stored value. Name it.
     return {
       ok: false,
       reason: "sender_secret_mismatch",

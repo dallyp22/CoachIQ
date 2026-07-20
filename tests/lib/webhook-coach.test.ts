@@ -169,6 +169,25 @@ describe("resolveWebhookCoach — fallback and failures", () => {
     expect(out).toMatchObject({ ok: true });
   });
 
+  it("falls back to the env secret when the SENDER's stored secret cannot be decrypted", async () => {
+    // The key-divergence case: the backfill ran under a different
+    // COACHIQ_SECRETS_KEY than the app serves. Todd is matched as sender, his
+    // stored secret will not decrypt, and without this his every recording
+    // would 401 permanently — the exact failure the fallback exists to stop,
+    // on the exact path his recordings take.
+    mocks.decryptOptional.mockImplementation(() => {
+      throw new Error("wrong key");
+    });
+    process.env.COACHIQ_FATHOM_WEBHOOK_SECRET = TODD_SECRET;
+
+    const out = await resolveWebhookCoach(
+      PAYLOAD,
+      signWith(TODD_SECRET),
+      "todd@growwithcocreate.com"
+    );
+    expect(out).toMatchObject({ ok: true, matchedBy: "fallback" });
+  });
+
   it("does NOT use the env fallback when the sender is known but their secret fails", async () => {
     // The named-failure path must stay named: silently accepting via the env
     // secret would hide a coach whose stored secret is stale, which is the

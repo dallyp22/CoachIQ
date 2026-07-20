@@ -27,7 +27,10 @@
 import { prisma } from "../src/lib/db";
 import { Decimal } from "@prisma/client/runtime/client";
 
-const DRY_RUN = process.argv.includes("--dry-run");
+// Inverted default: this deletes every invoice and writes off every time
+// entry on a live billing database. A bare invocation now previews; writing
+// requires --confirm. A tab-completion slip should not be unrecoverable.
+const DRY_RUN = !process.argv.includes("--confirm");
 const KEEP_RETAINERS = process.argv.includes("--keep-retainers");
 
 async function main() {
