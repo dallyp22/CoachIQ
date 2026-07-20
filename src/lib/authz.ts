@@ -197,6 +197,38 @@ export function invoiceWhere(
   return coachId ? { OR: [{ client: { coachId } }, { group: { coachId } }] } : {};
 }
 
+/**
+ * Prospects carry TWO coach columns — `coachId` (who owns the lead) and
+ * `assignedCoachId` (who currently works it) — and a COACH must see a prospect
+ * when EITHER matches.
+ *
+ * Neither single-column helper above can express this, and picking one is
+ * wrong in both directions:
+ *   - ownership only  → Todd triages the inbox and assigns a lead to Kurt;
+ *                       Kurt opens an empty pipeline.
+ *   - assignment only → `assignedCoachId` is nullable, so unassigned prospects
+ *                       vanish for every COACH, destroying the "nobody has
+ *                       picked this up" state the module exists to surface.
+ */
+export function prospectWhere(
+  coachId: string | null
+): { OR?: Array<{ coachId: string } | { assignedCoachId: string }> } {
+  return coachId ? { OR: [{ coachId }, { assignedCoachId: coachId }] } : {};
+}
+
+/**
+ * Single-row equivalent of prospectWhere. Same 404-not-403 rule as canAccess:
+ * confirming a prospect exists but belongs to someone else is a disclosure.
+ */
+export function canAccessProspect(
+  coachId: string | null,
+  row: { coachId: string; assignedCoachId: string | null } | null | undefined
+): boolean {
+  if (coachId === null) return true;
+  if (!row) return false;
+  return row.coachId === coachId || row.assignedCoachId === coachId;
+}
+
 // ─── Effective configuration ──────────────────────────
 
 export type PracticeSettings = {

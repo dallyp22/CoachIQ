@@ -95,6 +95,34 @@ enum JobStatus {
   FAILED
 }
 
+// ─── PIPELINE ─────────────────────────────────────────
+
+/// A stage marked terminal closes the prospect. At most ONE non-archived stage
+/// may carry each value — enforced by a partial unique index, not convention,
+/// because the convert-to-client rule keys off it and stages are editable rows.
+enum StageOutcome {
+  WON
+  LOST
+}
+
+enum OpportunityType {
+  COACHING
+  FACILITATION
+  IMPLEMENTATION
+  MULTIPLE
+}
+
+enum ProspectSource {
+  MANUAL
+  EMAIL_INTAKE // Phase 3: Gmail label pre-fill
+  REFERRAL_GRAPH // future: ReferralGraph module hand-off
+}
+
+enum ActivityKind {
+  LOGGED // already happened
+  PLANNED // scheduled; completing it makes it the "last activity"
+}
+
 // ─── MODELS ───────────────────────────────────────────
 
 // ─── COACHES ──────────────────────────────────────────
@@ -149,9 +177,12 @@ model Coach {
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
 
-  clients           Client[]
-  billingGroups     BillingGroup[]
-  pendingRecordings PendingRecording[]
+  clients            Client[]
+  billingGroups      BillingGroup[]
+  pendingRecordings  PendingRecording[]
+  ownedProspects     Prospect[]         @relation("ProspectOwner")
+  assignedProspects  Prospect[]         @relation("ProspectAssignee")
+  pipelineActivities PipelineActivity[]
 
   @@index([status])
   @@map("coaches")
@@ -211,6 +242,10 @@ model Client {
   allowsFathom        Boolean        @default(true)
   status              ClientStatus   @default(ACTIVE)
   notes               String?
+  /// Carried over from Prospect.needSummary at conversion, so the "description
+  /// of need" survives into the coaching relationship. No prior equivalent
+  /// existed — `notes` is free-text and used for other things.
+  needSummary         String?
   tags                String[]       @default([])
   sessionCount        Int            @default(0)
   createdAt           DateTime       @default(now())
@@ -223,6 +258,9 @@ model Client {
   prepBriefs   PrepBrief[]
   billingGroup BillingGroup? @relation(fields: [billingGroupId], references: [id])
   coach        Coach         @relation(fields: [coachId], references: [id])
+  /// Back-relation for Prospect.convertedToClientId (unique — one prospect
+  /// converts to one client).
+  convertedFrom Prospect?
 
   @@unique([coachId, email])
   @@index([status])
@@ -420,6 +458,157 @@ model BillingAuditLog {
   @@index([invoiceId])
   @@index([event, createdAt(sort: Desc)])
   @@map("billing_audit_logs")
+}
+
+// ─── PIPELINE ─────────────────────────────────────────
+
+/// Ordered lookup table so the team can rename and reorder stages without a
+/// migration — Settings exposes rename / reorder / isHot only. Adding,
+/// deleting, or re-marking a stage terminal is deliberately NOT editable:
+/// those are the operations that can strand the convert-to-client rule.
+///
+/// ⚠ RAW-SQL-MANAGED INDEX — DO NOT ACCEPT A DROP.
+/// `pipeline_stages_one_live_per_terminal` is a PARTIAL unique index created in
+/// 20260719_pipeline_module/migration.sql:
+///     UNIQUE ("terminal") WHERE "terminal" IS NOT NULL AND "isArchived" = false
+/// Prisma cannot express partial indexes, so the differ does not see it and
+/// WILL propose `DROP INDEX pipeline_stages_one_live_per_terminal` on the next
+/// `prisma migrate dev`. Accepting that silently removes the invariant that
+/// makes convert-to-client safe (exactly one live WON and one live LOST stage),
+/// allowing two WON stages and breaking the convert rule with no error.
+/// Same hazard class as transcripts.embedding / transcripts.search_text below.
+model PipelineStage {
+  id         String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String
+  sortOrder  Int
+  /// Included in the Hot Prospects report. Which stages count is Joel's call,
+  /// which is exactly why it is a toggle and not a constant.
+  isHot      Boolean       @default(false)
+  /// null = open. See StageOutcome — at most one non-archived stage per value.
+  terminal   StageOutcome?
+  /// Soft-remove; historical prospects keep their FK. Archiving the last
+  /// non-archived WON or LOST stage is refused in the application.
+  isArchived Boolean       @default(false)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  prospects Prospect[]
+
+  @@index([sortOrder])
+  @@map("pipeline_stages")
+}
+
+/// A lead. Deliberately NOT a Client with status PROSPECT: the Client model
+/// carries billing machinery (Stripe, cadences, retainers, invoice scheduling)
+/// that is meaningless for a lead and dangerous if a cron ever treats one as
+/// billable. ClientStatus.PROSPECT is deprecated by this model.
+///
+/// TWO coach columns, on purpose:
+///   coachId         — who owns the lead (required; set to the creator)
+///   assignedCoachId — who currently works it (nullable)
+/// A COACH sees a prospect when EITHER matches — see prospectWhere() in
+/// src/lib/authz.ts. Scoping on ownership alone hides prospects assigned to
+/// you; scoping on assignment alone hides unassigned ones from everybody,
+/// which destroys the "nobody has picked this up" state the whole module
+/// exists to surface.
+model Prospect {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  coachId         String          @db.Uuid
+  assignedCoachId String?         @db.Uuid
+  firstName       String
+  lastName        String
+  company         String?
+  opportunityType OpportunityType @default(COACHING)
+  /// "Description of need". Mirrored onto Client.needSummary at conversion.
+  needSummary     String?
+  /// Optional here, REQUIRED on Client. The convert flow prompts for it when
+  /// missing rather than blocking creation — a pasted lead often has no
+  /// address yet, and by the time you have won the deal you certainly do.
+  /// Never store "" as a stand-in: clients are unique on (coachId, email), so
+  /// a second empty string would collide and offer to link two strangers.
+  email           String?
+  phone           String?
+  source          ProspectSource  @default(MANUAL)
+  stageId         String          @db.Uuid
+  /// Reset by the API on every stage change. Powers "days in stage".
+  stageEnteredAt  DateTime        @default(now())
+  /// Denormalized from the soonest incomplete PLANNED activity. Maintained on
+  /// activity create / complete / delete / PATCH and cleared on a terminal
+  /// stage move. It exists so the default "stalest first" sort and its
+  /// pagination are correct in SQL — a sort computed after paging would bury
+  /// the most-neglected prospect on page 3.
+  ///
+  /// Sort it NULLS FIRST explicitly. Postgres defaults ASC to NULLS LAST,
+  /// which would sink every unscheduled prospect below every scheduled one —
+  /// and "none scheduled" is a worse condition than any overdue date.
+  nextActivityAt  DateTime?
+  /// Required when moving to a LOST stage.
+  lostReason      String?
+  notes           String?
+  /// Set by the Convert flow on a WON stage move.
+  convertedToClientId String? @unique @db.Uuid
+  createdAt       DateTime        @default(now()) // "Date added"
+  updatedAt       DateTime        @updatedAt
+
+  coach             Coach                 @relation("ProspectOwner", fields: [coachId], references: [id])
+  assignedCoach     Coach?                @relation("ProspectAssignee", fields: [assignedCoachId], references: [id])
+  stage             PipelineStage         @relation(fields: [stageId], references: [id])
+  convertedToClient Client?               @relation(fields: [convertedToClientId], references: [id])
+  activities        PipelineActivity[]
+  stageChanges      ProspectStageChange[]
+
+  @@index([coachId])
+  @@index([assignedCoachId])
+  @@index([stageId])
+  @@index([nextActivityAt])
+  @@map("prospects")
+}
+
+/// The activity log. Joel's spec asked for flat "last activity" / "next
+/// activity" fields; storing them that way destroys history on every update,
+/// and the requested reports require history. The UI derives his fields from
+/// these rows.
+model PipelineActivity {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  prospectId  String       @db.Uuid
+  kind        ActivityKind
+  /// When it happened, or is scheduled to.
+  activityAt  DateTime
+  notes       String?
+  /// Coach row; null renders as "System" (Phase 3 intake events).
+  ownerId     String?      @db.Uuid
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  prospect Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  owner    Coach?   @relation(fields: [ownerId], references: [id])
+
+  @@index([prospectId, activityAt])
+  /// Serves the "soonest incomplete planned activity" lookup that rebuilds
+  /// Prospect.nextActivityAt.
+  @@index([prospectId, kind, completedAt, activityAt])
+  @@map("pipeline_activities")
+}
+
+/// Stage history. Kept as a dedicated table rather than folded into
+/// BillingAuditLog because the reports read it as DATA (time in stage,
+/// stage-to-stage conversion), and those queries should not be JSON
+/// extraction. A BillingAuditLog row is written alongside for the human trail.
+model ProspectStageChange {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  prospectId  String   @db.Uuid
+  /// null = created into this stage.
+  fromStageId String?  @db.Uuid
+  toStageId   String   @db.Uuid
+  changedAt   DateTime @default(now())
+  /// Coach row; null = system.
+  changedById String?  @db.Uuid
+
+  prospect Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+
+  @@index([prospectId, changedAt])
+  @@map("prospect_stage_changes")
 }
 
 model PrepBrief {
