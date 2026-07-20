@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Modal, Field, inputClass } from "@/components/modal";
 
 /**
  * Add clients — one at a time, or a whole roster pasted in.
@@ -96,6 +97,8 @@ function AddClientModal({
       // discarding the good rows.
       setResult({ created: data.created?.length ?? 0, failed: data.failed ?? [] });
       router.refresh();
+    } catch {
+      setErr("Could not reach the server. Check your connection and try again.");
     } finally {
       setSaving(false);
     }
@@ -103,10 +106,10 @@ function AddClientModal({
 
   if (result) {
     return (
-      <Modal onClose={onClose}>
-        <h2 className="font-display text-xl text-foreground mb-2">
-          {result.created} client{result.created === 1 ? "" : "s"} added
-        </h2>
+      <Modal
+        title={`${result.created} client${result.created === 1 ? "" : "s"} added`}
+        onClose={onClose}
+      >
         {result.failed.length > 0 && (
           <>
             <p className="text-sm text-muted mb-3">
@@ -124,7 +127,7 @@ function AddClientModal({
         )}
         <button
           onClick={onClose}
-          className="mt-2 px-5 py-2.5 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors"
+          className="mt-2 min-h-11 px-5 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors"
         >
           Done
         </button>
@@ -133,20 +136,21 @@ function AddClientModal({
   }
 
   return (
-    <Modal onClose={onClose}>
-      <h2 className="font-display text-xl text-foreground mb-1">Add clients</h2>
+    <Modal title="Add clients" onClose={onClose}>
       <p className="text-sm text-muted mb-4">
         The email you enter is the one they join sessions with — it&apos;s how recordings find
         the right client.
       </p>
 
-      <div className="flex gap-1 mb-4 border-b border-border">
+      <div role="tablist" aria-label="How to add clients" className="flex gap-1 mb-4 border-b border-border">
         {(["single", "paste"] as const).map((m) => (
           <button
             key={m}
             type="button"
+            role="tab"
+            aria-selected={mode === m}
             onClick={() => setMode(m)}
-            className={`px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+            className={`min-h-11 px-3 text-sm border-b-2 -mb-px transition-colors ${
               mode === m
                 ? "border-accent text-foreground font-medium"
                 : "border-transparent text-muted hover:text-foreground"
@@ -212,62 +216,38 @@ function AddClientModal({
           </Field>
         )}
 
-        {err && <p className="text-sm text-[#B91C1C]">{err}</p>}
+        {mode === "paste" && pasted.trim() && (
+          <p className="text-xs text-muted" aria-live="polite">
+            {parsePasted(pasted).length} row
+            {parsePasted(pasted).length === 1 ? "" : "s"} recognized
+            {parsePasted(pasted).some((c) => !c.name || !c.email?.includes("@")) &&
+              " — some are missing a name or a valid email and will be skipped"}
+          </p>
+        )}
+
+        {err && (
+          <p role="alert" className="text-sm text-error">
+            {err}
+          </p>
+        )}
 
         <div className="flex gap-2 pt-2">
           <button
             type="submit"
             disabled={saving}
-            className="px-5 py-2.5 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors disabled:opacity-50"
+            className="min-h-11 px-5 bg-accent text-white text-sm font-medium rounded hover:bg-accent-hover transition-colors disabled:opacity-50"
           >
             {saving ? "Adding…" : "Add"}
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="px-5 py-2.5 border border-border text-sm rounded hover:bg-background transition-colors"
+            className="min-h-11 px-5 border border-border text-sm rounded hover:bg-background transition-colors"
           >
             Cancel
           </button>
         </div>
       </form>
     </Modal>
-  );
-}
-
-const inputClass =
-  "w-full px-3 py-2 border border-border rounded bg-background text-sm text-foreground";
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className="text-xs text-muted font-medium block mb-1">{label}</label>
-      {children}
-      {hint && <p className="text-[11px] text-muted mt-1 leading-snug">{hint}</p>}
-    </div>
-  );
-}
-
-function Modal({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-surface border border-border rounded-[var(--radius-lg)] p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {children}
-      </div>
-    </div>
   );
 }
