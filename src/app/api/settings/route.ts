@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireCoach, authzResponse } from "@/lib/authz";
+import { encryptSecret, isEncrypted } from "@/lib/secrets";
+import { maskCoachSecret, isMasked } from "@/lib/coach-secrets";
 
 /**
  * GET /api/settings — fetch practice settings.
@@ -22,13 +24,17 @@ export async function GET() {
     settings = await prisma.coachSettings.create({ data: {} });
   }
 
-  // Mask API keys for display (show last 4 chars only)
+  // Mask every secret column for display (last 4 chars of the real key only).
+  // maskCoachSecret decrypts first, so the mask reflects the key, not the
+  // ciphertext. These overrides must cover EVERY secret column, or the
+  // `...settings` spread above would emit a raw secret to the client.
   return NextResponse.json({
     ...settings,
     defaultHourlyRate: Number(settings.defaultHourlyRate),
-    openaiApiKey: maskKey(settings.openaiApiKey),
-    anthropicApiKey: maskKey(settings.anthropicApiKey),
-    stripeSecretKey: maskKey(settings.stripeSecretKey),
+    openaiApiKey: maskCoachSecret(settings.openaiApiKey),
+    anthropicApiKey: maskCoachSecret(settings.anthropicApiKey),
+    stripeSecretKey: maskCoachSecret(settings.stripeSecretKey),
+    fathomWebhookSecret: maskCoachSecret(settings.fathomWebhookSecret),
   });
 }
 
@@ -53,21 +59,40 @@ export async function PATCH(request: NextRequest) {
 
   const textFields = [
     "coachName", "coachEmail", "businessName", "googleCalendarId",
-    "fathomWebhookSecret", "coachingTitleFilter",
+    "coachingTitleFilter",
   ];
   for (const field of textFields) {
     if (body[field] !== undefined) updates[field] = body[field] || null;
   }
 
-  // API keys — only update if a new value is provided (not the masked version)
-  if (body.openaiApiKey && !body.openaiApiKey.startsWith("•••")) {
-    updates.openaiApiKey = body.openaiApiKey;
-  }
-  if (body.anthropicApiKey && !body.anthropicApiKey.startsWith("•••")) {
-    updates.anthropicApiKey = body.anthropicApiKey;
-  }
-  if (body.stripeSecretKey && !body.stripeSecretKey.startsWith("•••")) {
-    updates.stripeSecretKey = body.stripeSecretKey;
+  // Secret columns — encrypted at rest via src/lib/secrets.ts. Only update when
+  // a NEW value is provided: the GET response hands back a "•••1234" mask for
+  // untouched fields, and isMasked() guards against re-encrypting that mask AS
+  // the key. fathomWebhookSecret is a real signing secret and is protected the
+  // same way (it must never round-trip in the clear). encryptSecret throws when
+  // COACHIQ_SECRETS_KEY is missing/invalid — return a structured 500 rather
+  // than an opaque unhandled throw, matching the endpoint's other error shapes.
+  const SECRET_FIELDS = [
+    "openaiApiKey", "anthropicApiKey", "stripeSecretKey", "fathomWebhookSecret",
+  ] as const;
+  try {
+    for (const field of SECRET_FIELDS) {
+      const value = body[field];
+      // Encrypt only a genuine new plaintext string. The typeof guard keeps a
+      // non-string payload from reaching encryptSecret (whose input error would
+      // be mislabeled by the catch below as a key-config 500). Skip the mask
+      // (unchanged field) and any value already in envelope form (an admin
+      // re-submitting ciphertext) — the isEncrypted guard mirrors the backfill
+      // and stops a double-encryption that would decrypt to a "v1:…" key.
+      if (typeof value === "string" && value && !isMasked(value) && !isEncrypted(value)) {
+        updates[field] = encryptSecret(value);
+      }
+    }
+  } catch {
+    return NextResponse.json(
+      { error: "Secrets key is not configured — cannot save API keys." },
+      { status: 500 },
+    );
   }
 
   if (body.defaultHourlyRate !== undefined) {
@@ -147,15 +172,10 @@ export async function PATCH(request: NextRequest) {
     settings: {
       ...updated,
       defaultHourlyRate: Number(updated.defaultHourlyRate),
-      openaiApiKey: maskKey(updated.openaiApiKey),
-      anthropicApiKey: maskKey(updated.anthropicApiKey),
-      stripeSecretKey: maskKey(updated.stripeSecretKey),
+      openaiApiKey: maskCoachSecret(updated.openaiApiKey),
+      anthropicApiKey: maskCoachSecret(updated.anthropicApiKey),
+      stripeSecretKey: maskCoachSecret(updated.stripeSecretKey),
+      fathomWebhookSecret: maskCoachSecret(updated.fathomWebhookSecret),
     },
   });
-}
-
-function maskKey(key: string | null): string | null {
-  if (!key) return null;
-  if (key.length <= 8) return "••••••••";
-  return "•••" + key.slice(-4);
 }
