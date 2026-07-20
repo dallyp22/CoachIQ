@@ -122,20 +122,6 @@ WHERE NOT EXISTS (SELECT 1 FROM "coaches" WHERE "role" = 'OWNER');
 -- seeded coaches do. Anyone who currently uses CoachIQ and is not Todd must
 -- get a row, or they hit the no-access screen.
 --
-<<<<<<< Updated upstream
--- Both addresses are verified against the live Clerk user list (2026-07-19):
--- admin-one@example.com and admin-two@example.com are real accounts
--- that can sign in today. Seeding only one would lock the other out.
--- Joel and other management are added through the Add Coach flow (role ADMIN).
-INSERT INTO "coaches" (
-    "name", "loginEmail", "role", "status",
-    "inviteStatus", "fathomStatus", "calendarSyncEnabled", "updatedAt"
-)
-VALUES
-    ('Practice Admin One', 'admin-one@example.com', 'ADMIN', 'ACTIVE', 'OK', 'OK', false, CURRENT_TIMESTAMP),
-    ('Practice Admin Two', 'admin-two@example.com', 'ADMIN', 'ACTIVE', 'OK', 'OK', false, CURRENT_TIMESTAMP)
-ON CONFLICT ("loginEmail") DO NOTHING;
-=======
 -- Those addresses are personal and this repository is public, so they are
 -- supplied at run time instead of committed:
 --
@@ -144,7 +130,6 @@ ON CONFLICT ("loginEmail") DO NOTHING;
 --
 -- Run it in the same session as the migration. Joel and other management are
 -- added afterwards through the Add Coach flow.
->>>>>>> Stashed changes
 
 -- ─── 3. Coach ownership on clients ────────────────────
 
