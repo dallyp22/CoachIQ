@@ -3,6 +3,31 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.3.0.0] - 2026-07-20
+
+The sales pipeline. CoachIQ now tracks who you're talking to before they become a client, so "lead → client → revenue" lives in one system instead of a tracker document nobody else can see. Deliberately manual: nothing here captures a prospect for you, because the team asked to trust the process before automating it.
+
+### Added
+- **Pipeline.** A new section listing every prospect — name, company, opportunity type, stage, days in stage, and what happens next. It opens sorted by neglect: prospects with nothing scheduled sit at the top, then the overdue, then everything on track. Opening the page answers "who am I forgetting" without touching a filter.
+- **Adding prospects.** One at a time, or paste a whole tracker in. Only the name is required; company, what they need, and email are optional and fillable later. A company name containing a comma stays intact, and a paste straight out of Sheets works as-is.
+- **Prospect dossier.** Who they are on the left, the full history on the right — every call, email and meeting logged, interleaved with every stage move. Marking a planned activity done immediately offers to schedule the next one, which is the only thing keeping a manual cadence alive.
+- **Convert to client.** Winning a deal offers to create the client record, carrying their name, company, and what they need across, then drops you on the new client to set up billing. If that email already belongs to a client, it asks whether to link them rather than guessing.
+- **Reports.** Hot Prospects (the stages you flag as hot, with the full activity detail Joel specified) and Pipeline Summary (count by stage, average age, average time in stage, average time since last contact). Statistics with no data render as an em-dash, never a zero — "0 days in stage" would claim nothing is sitting there when the truth is nothing is there.
+- **Stage settings.** Rename, reorder, and flag stages as hot, so the team can name their own sales phases without a code change. Stages can't be added or removed: the won and lost stages drive the convert flow, and exactly one of each always exists.
+- **Coach filter.** Owners and admins can view the whole practice or narrow to one coach, on both the list and the reports.
+
+### Changed
+- Clients gained a "description of need" field, populated when a prospect converts, so the reason they came to you survives into the coaching relationship.
+- `ClientStatus.PROSPECT` is deprecated. Prospects are their own thing now, not clients wearing a different label — the client record carries billing machinery that is meaningless for a lead and dangerous if a cron ever treated one as billable.
+
+### Fixed
+Found by the pre-merge review, before any of it reached production:
+- Creating a prospect directly in a won stage could mint a billable client without passing through the stage flow — no history, no audit trail.
+- Reopening a closed prospect left it permanently claiming "none scheduled" while its own history showed a booked call.
+- Closing a prospect didn't stick: later edits to any activity would resume the overdue nagging on a finished deal.
+- Several edits in the dossier failed silently — a rejected save looked identical to a successful one, and the "plan next" prompt appeared even when marking done had failed.
+- Repeat business hit a dead end: linking a returning client reported that a client "was just created" for a collision that was permanent.
+
 ## [0.2.0.0] - 2026-07-19
 
 Multi-coach foundation. CoachIQ becomes a practice with more than one coach in it, rather than a single-user tool. Todd's experience is unchanged — everything that exists today belongs to him and behaves exactly as before — but the system now knows whose data is whose.

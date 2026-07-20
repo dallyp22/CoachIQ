@@ -226,6 +226,66 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 **Depends on:** Phase 4 NLM worker migration (existing TODO below).
 **Added:** 2026-07-19 via /plan-eng-review.
 
+## Pipeline Follow-ups (from the 2026-07-20 pre-merge review, v0.3.0.0)
+
+Ten reviewers ran on the Pipeline diff. The correctness and security findings were fixed before merge; these are what was deliberately deferred.
+
+### The stalest-first index doesn't match the sort
+**Priority:** P1
+`prospects_nextActivityAt_idx` is a default btree (ASC NULLS LAST) but every list query orders `ASC NULLS FIRST`, so Postgres cannot use it to satisfy the ordering and sorts the filtered set on every request. Both list surfaces are force-dynamic, so this is paid Neon compute on every page view. Fix: `CREATE INDEX ... ("nextActivityAt" ASC NULLS FIRST, "createdAt" DESC)` plus coach-scoped composites. Verify with EXPLAIN that the Sort node disappears.
+
+### PATCH /api/pipeline/stages is the weakest-tested route in the module
+**Priority:** P1
+13 of 17 branches untested, including every validation branch and the validate-before-write atomicity the code is built around ("applying half a reorder leaves the board scrambled"). It is ADMIN-reachable and practice-wide: one bad write reshapes every coach's board and every report. Also `canArchiveStage` has zero tests and no UI caller — the one rule `stages.ts` exists to enforce.
+
+### Reports load every open prospect into memory
+**Priority:** P2
+`reports/summary` and the reports page both fetch all open prospects with no limit, then ship every id back as an `IN (...)` list. Fine at Todd's scale, linear in pipeline size. Push the aggregation into SQL with `groupBy` and use a relation filter instead of the id list.
+
+### Batch prospect create opens one transaction per row
+**Priority:** P2
+A 40-row tracker paste costs 40 sequential BEGIN/COMMIT round trips. The per-row transaction is what buys the 207 partial-success response, so batching means either savepoints or pre-validating in JS and batching the survivors.
+
+### Stage settings PATCH issues one findUnique per patch
+**Priority:** P2
+A drag-reorder sends all seven stages, so one reorder is seven sequential round trips before any write. Hoist to a single `findMany({ where: { id: { in: ids } } })` and validate against a Set — same fail-before-write behavior, one round trip.
+
+### Duplicated query logic across the API routes and the pages
+**Priority:** P2
+The pages query Prisma directly and the API routes duplicate the same where-clause chains and helpers; nothing calls `GET /api/pipeline/prospects` or `/reports/summary` at all. `OPPORTUNITY_TYPES` is redeclared in four files while Prisma already generates the enum. `MS_PER_DAY` is defined four times with three different rounding semantics, so "days in stage" can differ between the row and the API. Extract shared helpers, or delete the unconsumed routes.
+
+### Migration hygiene
+**Priority:** P2
+The stage seed is not idempotent (no ON CONFLICT, no unique on name) — safe only because `CREATE TYPE` fails first on a full re-run, but re-running section 5 alone would silently duplicate stages. No `down.sql` is committed. The directory is `20260719_pipeline_module` with no HHMMSS, so correct ordering against `20260719_multi_coach_foundation` depends on 'm' sorting before 'p'. `prospect_stage_changes` has no FK on `fromStageId`/`toStageId`.
+
+### Dossier accessibility
+**Priority:** P2
+Three bare `<label>` elements with no `htmlFor` (stage select, activity date, owner). The shared `Field` component in `components/modal.tsx` has the same defect, which this diff multiplied across every new form. Async status messages need `role="status"`. Fix `Field` once and most of it resolves.
+
+### The stage select commits on change
+**Priority:** P2
+On Windows/Linux Chrome and Firefox, arrow-keying a closed `<select>` fires change immediately — so a keyboard user tabbing to Stage and pressing Down moves the prospect, writes a history row, and can trip the lost-reason modal or the convert offer without ever opening the menu. Stage the selection and commit behind an explicit control, or commit on blur.
+
+### Delete on a timeline row is invisible on touch
+**Priority:** P2
+`opacity-0` until group-hover. Touch devices have no hover, so the control is invisible but still hit-testable — an unconfirmed, irreversible delete under the thumb at the right edge of every row. Show it at reduced contrast instead, and add a confirm step.
+
+### Mobile bottom nav is at seven tabs
+**Priority:** P3
+Adding Pipeline took it from 6 to 7 flex-1 tabs — 53.6px each at 375px. Tap targets still clear 44px, but the labels have ~5px of breathing room and an eighth tab is not possible. Consider moving Settings behind the top header or grouping Groups/Invoices under "More".
+
+### Batch create returns raw Prisma error text
+**Priority:** P3
+The per-row failure path returns `err.message` verbatim, and Prisma messages carry table, column and constraint names. Log the detail server-side, return a fixed string.
+
+### Convert returns 201 for a link
+**Priority:** P3
+The linked branch creates no client — it modifies two existing rows — so 200 is the honest code. Also the module mixes 422 (convert's missing email) and 400 (everywhere else) for validation failures; pick one.
+
+### No E2E coverage for any UI flow
+**Priority:** P3
+The repo has no E2E framework and zero `.tsx` has ever been tested. The pure logic that shipped in React files (`parsePasted` is now covered; `move()` in stage settings, the timeline merge, and the `cells.tsx` branches are not) could be unit-tested today without a DOM. The user flows — paste import, mark lost, reorder stages, empty states — need a real browser.
+
 ## Phase 4 Bugs
 
 ### NLM retry_failed.py is broken
