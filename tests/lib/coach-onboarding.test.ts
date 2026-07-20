@@ -3,8 +3,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({
   coachFindUnique: vi.fn(),
   coachUpdate: vi.fn(),
+  coachUpdateMany: vi.fn(),
   createInvitation: vi.fn(),
   registerWebhook: vi.fn(),
+  deleteWebhook: vi.fn(),
   encryptOptional: vi.fn((v: string | null) => (v ? `enc:${v}` : null)),
   decryptOptional: vi.fn((v: string | null) => (v ? String(v).replace(/^enc:/, "") : null)),
 }));
@@ -13,13 +15,22 @@ vi.mock("@clerk/nextjs/server", () => ({
   clerkClient: async () => ({ invitations: { createInvitation: mocks.createInvitation } }),
 }));
 vi.mock("@/lib/db", () => ({
-  prisma: { coach: { findUnique: mocks.coachFindUnique, update: mocks.coachUpdate } },
+  prisma: {
+    coach: {
+      findUnique: mocks.coachFindUnique,
+      update: mocks.coachUpdate,
+      updateMany: mocks.coachUpdateMany,
+    },
+  },
 }));
 vi.mock("@/lib/secrets", () => ({
   encryptOptional: mocks.encryptOptional,
   decryptOptional: mocks.decryptOptional,
 }));
-vi.mock("@/lib/fathom", () => ({ registerWebhook: mocks.registerWebhook }));
+vi.mock("@/lib/fathom", () => ({
+  registerWebhook: mocks.registerWebhook,
+  deleteWebhook: mocks.deleteWebhook,
+}));
 
 import { provisionCoach, outstandingActions } from "@/lib/coach-onboarding";
 
@@ -38,6 +49,8 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   mocks.coachFindUnique.mockResolvedValue({ ...BASE });
   mocks.coachUpdate.mockResolvedValue({});
+  mocks.coachUpdateMany.mockResolvedValue({ count: 1 });
+  mocks.deleteWebhook.mockResolvedValue(undefined);
   mocks.createInvitation.mockResolvedValue({ id: "inv_1" });
   mocks.registerWebhook.mockResolvedValue({ id: "wh_1", url: "u", secret: "whsec_abc" });
 });
@@ -54,9 +67,11 @@ describe("provisionCoach — happy path", () => {
         ignoreExisting: true,
       })
     );
-    // The returned secret is stored encrypted, never in the clear.
-    expect(mocks.coachUpdate).toHaveBeenCalledWith(
+    // The returned secret is stored encrypted, never in the clear, and only
+    // when this call is the one that claims the slot.
+    expect(mocks.coachUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({
+        where: { id: "coach-kurt", fathomWebhookId: null },
         data: expect.objectContaining({
           fathomWebhookId: "wh_1",
           fathomWebhookSecret: "enc:whsec_abc",
@@ -80,6 +95,25 @@ describe("provisionCoach — idempotency", () => {
     const result = await provisionCoach("coach-kurt");
 
     expect(mocks.registerWebhook).not.toHaveBeenCalled();
+    expect(result.fathomStatus).toBe("OK");
+  });
+
+  it("deletes its own duplicate when a concurrent registration won the race", async () => {
+    // Both callers read fathomWebhookId as null and both register. The loser
+    // must remove its webhook, or Fathom keeps delivering under a secret we
+    // no longer store — permanent 401s on a coach whose setup looks fine.
+    mocks.coachUpdateMany.mockResolvedValue({ count: 0 });
+
+    const result = await provisionCoach("coach-kurt");
+
+    expect(mocks.deleteWebhook).toHaveBeenCalledWith("fathom-key", "wh_1");
+    expect(result.fathomStatus).toBe("OK");
+  });
+
+  it("does not fail provisioning if cleaning up the duplicate fails", async () => {
+    mocks.coachUpdateMany.mockResolvedValue({ count: 0 });
+    mocks.deleteWebhook.mockRejectedValue(new Error("Fathom unreachable"));
+    const result = await provisionCoach("coach-kurt");
     expect(result.fathomStatus).toBe("OK");
   });
 

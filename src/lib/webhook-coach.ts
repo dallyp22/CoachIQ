@@ -79,6 +79,38 @@ function secretOf(row: { fathomWebhookSecret: string | null; name: string }): st
   }
 }
 
+/**
+ * Pre-multi-coach, the webhook verified against a single environment secret.
+ * If the backfill onto the OWNER's row has not run, falling back to that env
+ * value is the difference between a normal day and every recording being
+ * rejected until someone reads the logs — Fathom stops retrying, so those
+ * sessions are unrecoverable.
+ *
+ * Deliberately loud: it announces itself on every use so it cannot quietly
+ * become the permanent mechanism.
+ */
+async function legacyEnvFallback(
+  payload: Buffer,
+  headers: SignatureHeaders
+): Promise<CoachIdentity | null> {
+  const envSecret = process.env.COACHIQ_FATHOM_WEBHOOK_SECRET?.trim();
+  if (!envSecret || !verifySignature(payload, headers, envSecret)) return null;
+
+  const owner = await prisma.coach.findFirst({
+    where: { role: "OWNER" },
+    orderBy: { createdAt: "asc" },
+    select: CANDIDATE_SELECT,
+  });
+  if (!owner) return null;
+
+  console.warn(
+    `[fathom-webhook] Verified against the legacy COACHIQ_FATHOM_WEBHOOK_SECRET, ` +
+      `not a stored per-coach secret. Run scripts/backfill-fathom-secret.ts to move it ` +
+      `onto ${owner.name}'s coach row; this fallback will be removed.`
+  );
+  return strip(owner);
+}
+
 export async function resolveWebhookCoach(
   payload: Buffer,
   headers: SignatureHeaders,
@@ -86,6 +118,8 @@ export async function resolveWebhookCoach(
 ): Promise<ResolveOutcome> {
   const coaches = await candidateCoaches();
   if (coaches.length === 0) {
+    const legacy = await legacyEnvFallback(payload, headers);
+    if (legacy) return { ok: true, coach: legacy, matchedBy: "fallback" };
     return { ok: false, reason: "no_coaches_configured", senderEmail };
   }
 
@@ -121,6 +155,11 @@ export async function resolveWebhookCoach(
       return { ok: true, coach: strip(coach), matchedBy: "fallback" };
     }
   }
+
+  // Coaches exist with secrets, but none verified. The env secret may still
+  // be the live one if the backfill has not run yet.
+  const legacy = await legacyEnvFallback(payload, headers);
+  if (legacy) return { ok: true, coach: legacy, matchedBy: "fallback" };
 
   return { ok: false, reason: "no_secret_matched", senderEmail };
 }

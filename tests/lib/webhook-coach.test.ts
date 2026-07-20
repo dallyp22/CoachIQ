@@ -3,10 +3,13 @@ import crypto from "crypto";
 
 const mocks = vi.hoisted(() => ({
   coachFindMany: vi.fn(),
+  coachFindFirst: vi.fn(),
   decryptOptional: vi.fn(),
 }));
 
-vi.mock("@/lib/db", () => ({ prisma: { coach: { findMany: mocks.coachFindMany } } }));
+vi.mock("@/lib/db", () => ({
+  prisma: { coach: { findMany: mocks.coachFindMany, findFirst: mocks.coachFindFirst } },
+}));
 vi.mock("@/lib/secrets", () => ({ decryptOptional: mocks.decryptOptional }));
 
 import { resolveWebhookCoach, describeFailure } from "@/lib/webhook-coach";
@@ -48,6 +51,9 @@ const kurt = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  delete process.env.COACHIQ_FATHOM_WEBHOOK_SECRET;
+  mocks.coachFindFirst.mockResolvedValue(todd);
   mocks.coachFindMany.mockResolvedValue([todd, kurt]);
   mocks.decryptOptional.mockImplementation((v: string | null) =>
     v === "enc:todd" ? TODD_SECRET : v === "enc:kurt" ? KURT_SECRET : null
@@ -136,6 +142,61 @@ describe("resolveWebhookCoach — fallback and failures", () => {
         where: { status: { not: "INACTIVE" }, fathomWebhookSecret: { not: null } },
       })
     );
+  });
+
+  it("falls back to the legacy env secret when no coach has one yet", async () => {
+    // The window between deploying and running the backfill script. Without
+    // this, every recording 401s and Fathom eventually stops retrying —
+    // those sessions are unrecoverable.
+    mocks.coachFindMany.mockResolvedValue([]);
+    process.env.COACHIQ_FATHOM_WEBHOOK_SECRET = TODD_SECRET;
+
+    const out = await resolveWebhookCoach(PAYLOAD, signWith(TODD_SECRET), "todd@growwithcocreate.com");
+    expect(out).toMatchObject({ ok: true });
+    if (out.ok) expect(out.coach.id).toBe("coach-todd");
+  });
+
+  it("falls back to the env secret when coaches have secrets but none match and the sender is unclaimed", async () => {
+    // Partially-backfilled state: some coach rows carry secrets, but the
+    // recording came from an address none of them claim and was signed with
+    // the still-live env secret.
+    process.env.COACHIQ_FATHOM_WEBHOOK_SECRET = "cGxhaW4tZW52LXNlY3JldA==";
+    const out = await resolveWebhookCoach(
+      PAYLOAD,
+      signWith("cGxhaW4tZW52LXNlY3JldA=="),
+      "someone@unclaimed.com"
+    );
+    expect(out).toMatchObject({ ok: true });
+  });
+
+  it("does NOT use the env fallback when the sender is known but their secret fails", async () => {
+    // The named-failure path must stay named: silently accepting via the env
+    // secret would hide a coach whose stored secret is stale, which is the
+    // one thing describeFailure exists to make visible.
+    process.env.COACHIQ_FATHOM_WEBHOOK_SECRET = "cGxhaW4tZW52LXNlY3JldA==";
+    const out = await resolveWebhookCoach(
+      PAYLOAD,
+      signWith("cGxhaW4tZW52LXNlY3JldA=="),
+      "kurt@work.com"
+    );
+    expect(out).toMatchObject({ ok: false, reason: "sender_secret_mismatch", coachName: "Kurt" });
+  });
+
+  it("announces every use of the legacy fallback so it cannot become permanent silently", async () => {
+    mocks.coachFindMany.mockResolvedValue([]);
+    process.env.COACHIQ_FATHOM_WEBHOOK_SECRET = TODD_SECRET;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await resolveWebhookCoach(PAYLOAD, signWith(TODD_SECRET), null);
+    expect(warn.mock.calls.flat().join(" ")).toMatch(/backfill-fathom-secret/);
+  });
+
+  it("still rejects a bad signature when the env fallback is present", async () => {
+    mocks.coachFindMany.mockResolvedValue([]);
+    process.env.COACHIQ_FATHOM_WEBHOOK_SECRET = TODD_SECRET;
+    const bogus = Buffer.from("not-the-secret").toString("base64");
+    const out = await resolveWebhookCoach(PAYLOAD, signWith(bogus), null);
+    expect(out).toMatchObject({ ok: false });
   });
 
   it("admits an INVITED coach — ingest is gated on configuration, not on login", async () => {

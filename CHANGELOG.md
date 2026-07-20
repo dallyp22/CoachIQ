@@ -3,6 +3,37 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.2.0.0] - 2026-07-19
+
+Multi-coach foundation. CoachIQ becomes a practice with more than one coach in it, rather than a single-user tool. Todd's experience is unchanged — everything that exists today belongs to him and behaves exactly as before — but the system now knows whose data is whose.
+
+### Added
+- **Coach accounts.** A Coaches section in Settings (owner and admin only) where adding a coach creates their account, emails them an invitation, and connects their Fathom recordings from an API key. The list shows what is actually live for each coach — signed in, Fathom connected, calendar configured — and offers a retry where something failed, so a half-finished setup can't sit there looking fine.
+- **Adding clients.** Until now there was no way to add a client anywhere in the product; the existing ones came from a one-time import. Clients can now be added one at a time or by pasting a whole list, which is what onboarding a coach actually requires. New clients inherit their coach's default rate.
+- **Roles.** Owner, admin, and coach. A coach sees only their own clients, sessions, invoices, and search results. Owners and admins see the whole practice and can filter to one coach.
+- **Unmatched recordings are now a reviewable list** rather than a file dropped in Drive and a line in a log.
+
+### Changed
+- **Recordings find their own coach.** An incoming Fathom recording is matched to the coach who recorded it and verified against that coach's own signing secret, then matched to a client within that coach's book. Each coach connects their own Fathom account, calendar, and Drive folder.
+- **The same person can be a client of two different coaches** without the two records colliding.
+- Session titles are filtered by each coach's own pattern instead of one hard-coded rule, and the pattern is checked when it's saved rather than failing later.
+
+### Fixed
+- **Signing in no longer grants access to everything.** Previously any account that could sign in could read every client, transcript, and invoice; semantic search ranked across the entire practice regardless of who was asking. Access is now resolved per coach on every request, and an account with no coach record is told it has no access instead of being shown the practice.
+- Several actions had no ownership check at all, including sending an invoice through Stripe.
+- Alert colours now shift in dark mode. Error text was rendering at 3.62:1 contrast on the dark background, below the readable minimum.
+- Neither dialog could be operated from a keyboard — no Escape, no focus handling. Both now can.
+- The Clients page previously said clients were detected automatically from recordings, behind a button that did nothing. Neither was true.
+- The Settings page said AI keys were encrypted at rest. They are not; only the new per-coach credentials are. The claim has been removed rather than the truth obscured.
+
+### Security
+- Per-coach Fathom credentials are encrypted at rest (AES-256-GCM) and never returned by any endpoint.
+- Practice settings, including keys and the billing danger zone, are restricted to admins and above.
+- Generating invoices, running a calendar sync, and testing the calendar connection all required nothing more than being signed in. All three now require admin, since each acts across the whole practice.
+
+### Upgrading
+- The Fathom signing secret moves from an environment variable onto the owner's coach record. Run `scripts/backfill-fathom-secret.ts` alongside the migration. If it hasn't run, incoming recordings fall back to the environment secret and log a notice rather than being rejected.
+
 ## [0.1.1.0] - 2026-07-19
 
 ### Changed

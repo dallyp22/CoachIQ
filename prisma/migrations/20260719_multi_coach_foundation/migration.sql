@@ -7,8 +7,17 @@
 -- now declared as Unsupported() in schema.prisma so the differ sees them, but
 -- this file still touches nothing on "transcripts".
 --
--- Ordering (Prisma runs the whole file in one transaction — a failure anywhere
--- rolls the entire thing back, so there is no half-migrated state):
+-- TRANSACTION: `prisma migrate deploy` wraps this file in one transaction.
+-- Applying it by hand with psql does NOT — psql commits each statement
+-- separately, which would make the invariant checks at the bottom decorative
+-- (they would RAISE after everything before them had already committed, and
+-- the file cannot be re-run because CREATE TYPE would fail). The explicit
+-- BEGIN/COMMIT below makes the by-hand path behave like the Prisma path.
+-- Prisma tolerates the redundant wrapper.
+BEGIN;
+
+-- Ordering (a failure anywhere rolls the entire thing back, so there is no
+-- half-migrated state):
 --   1. enums + new tables
 --   2. seed the OWNER (from coach_settings) and the ADMIN
 --   3. add coachId nullable → backfill to OWNER → SET NOT NULL → FK + index
@@ -181,3 +190,5 @@ BEGIN
         RAISE EXCEPTION 'Found % billing group member(s) whose coach differs from the group coach', mixed_groups;
     END IF;
 END $$;
+
+COMMIT;

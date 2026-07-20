@@ -208,6 +208,7 @@ function AddCoachModal({
     workEmails: "",
     role: "COACH",
     fathomApiKey: "",
+    fathomWebhookSecret: "",
     googleCalendarId: "",
     driveRootFolderId: "",
     defaultHourlyRate: "",
@@ -349,12 +350,27 @@ function AddCoachModal({
 
           <Field
             label="Fathom API key"
-            hint="With it we register their webhook automatically. Without it, you'll add the webhook manually in Fathom."
+            hint="With it we register their webhook automatically. Without it, you'll add the webhook manually in Fathom and paste the signing secret below."
           >
             <input
               type="password"
               value={form.fathomApiKey}
               onChange={(e) => set("fathomApiKey", e.target.value)}
+              className={inputClass}
+            />
+          </Field>
+
+          {/* The manual recovery path. outstandingActions tells the admin to
+              paste a signing secret; without this field that instruction had
+              nowhere to go, and fixing a webhook outage meant raw SQL. */}
+          <Field
+            label="Fathom webhook signing secret"
+            hint="Only needed if you set the webhook up by hand in Fathom. Starts with whsec_."
+          >
+            <input
+              type="password"
+              value={form.fathomWebhookSecret}
+              onChange={(e) => set("fathomWebhookSecret", e.target.value)}
               className={inputClass}
             />
           </Field>

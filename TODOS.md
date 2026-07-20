@@ -176,6 +176,15 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 **Fix path:** Store the calendar event ID on PrepBrief, dedup on it, and add a unique constraint (mirrors the Session.calendarEventId pattern); regenerate on event-time change; set delivered only when the brief is actually surfaced.
 **Added:** 2026-07-06 via /ship (adversarial review, finding 10); expanded 2026-07-19.
 
+## Tooling
+
+### `npm run lint` is unusable — 2,682 errors, almost all from .venv
+**Priority:** P3
+**What:** ESLint walks `.venv/lib` (the Python virtualenv from the v1 worker) and third-party JS in `chrome-extension/`, producing 11,345 problems of which ~2,682 are errors. Real errors in authored `src/` code are buried; verified 2026-07-19 that the current branch has zero lint errors in changed files, but only by filtering the output by hand.
+**Why:** A lint command nobody can read is a lint command nobody runs, so it catches nothing. It also can't be wired into CI in this state.
+**Fix path:** Add `.venv/`, `chrome-extension/`, and `src/generated/` to the ESLint ignore config (flat config `ignores` in `eslint.config.mjs`), then fix whatever genuine errors remain in `src/` and `scripts/`.
+**Added:** 2026-07-19 during /ship.
+
 ## Design System Follow-ups
 
 ### Chart colors don't follow the theme

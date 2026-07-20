@@ -1,7 +1,7 @@
 import { clerkClient } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { encryptOptional, decryptOptional } from "@/lib/secrets";
-import { registerWebhook } from "@/lib/fathom";
+import { registerWebhook, deleteWebhook } from "@/lib/fathom";
 import { appBaseUrl, fathomWebhookUrl } from "@/lib/app-url";
 
 /**
@@ -92,13 +92,27 @@ export async function provisionCoach(coachId: string): Promise<ProvisionResult> 
     } else if (apiKey) {
       try {
         const webhook = await registerWebhook(apiKey, fathomWebhookUrl());
-        await prisma.coach.update({
-          where: { id: coach.id },
+        // Conditional write: two concurrent submits (or a double-clicked
+        // Retry) can both read fathomWebhookId as null and both register.
+        // Whoever writes second would otherwise overwrite the first id,
+        // orphaning a live webhook that keeps delivering under a secret we
+        // no longer store — permanent 401s attributed to a coach whose setup
+        // looks fine. The loser deletes its own registration instead.
+        const claimed = await prisma.coach.updateMany({
+          where: { id: coach.id, fathomWebhookId: null },
           data: {
             fathomWebhookId: webhook.id,
             fathomWebhookSecret: encryptOptional(webhook.secret),
           },
         });
+        if (claimed.count === 0) {
+          console.warn(
+            `[add-coach] A concurrent registration won for coach ${coach.id}; removing the duplicate webhook ${webhook.id}.`
+          );
+          await deleteWebhook(apiKey, webhook.id).catch((e) =>
+            console.error(`[add-coach] Could not remove duplicate webhook ${webhook.id}:`, e)
+          );
+        }
         result.fathomStatus = "OK";
       } catch (err) {
         result.fathomStatus = "FAILED";

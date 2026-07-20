@@ -1,11 +1,20 @@
 import { NextResponse } from "next/server";
 import { getCalendar, hasCalendarCredentials } from "@/lib/google-calendar";
 import { prisma } from "@/lib/db";
+import { requireCoach, authzResponse } from "@/lib/authz";
 
 /**
  * GET /api/calendar/test — verify the service account can access Todd's calendar.
  */
 export async function GET() {
+  // Returns the practice calendar's id, name and timezone plus the pipeline
+  // service-account address. Practice-level diagnostics, not coach data.
+  try {
+    await requireCoach("ADMIN");
+  } catch (err) {
+    return authzResponse(err);
+  }
+
   try {
     if (!hasCalendarCredentials()) {
       return NextResponse.json(
