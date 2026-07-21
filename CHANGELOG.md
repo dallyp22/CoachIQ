@@ -3,6 +3,21 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.3.1.0] - 2026-07-20
+
+Practice-level secrets are encrypted at rest. The API keys stored in Settings sat in the database as plaintext, so any copy of it — a Neon branch, a backup, an accidental dump — handed over live Stripe, OpenAI, and Anthropic credentials. They now go through the same AES-256-GCM envelope the per-coach Fathom secrets already used, and the Settings page's claim that they're "encrypted at rest" is finally true.
+
+### Security
+- **The four secret columns on CoachSettings are encrypted on write and decrypted only at the point of use.** OpenAI and Anthropic keys are the live ones (read on every synopsis, brief, and embedding); the Stripe and Fathom-webhook columns are stored and protected but currently dormant — no code path reads them yet, so this change protects them at rest without implying Stripe traffic runs through the stored key.
+- **A raw webhook signing secret stopped leaking in the Settings API response.** `fathomWebhookSecret` was returned unmasked to the browser via the response spread; it is now masked like every other secret. Every secret column the GET/PATCH response can emit is masked — the raw value never leaves the server after it is saved.
+- **Reads tolerate the transition.** A not-yet-migrated plaintext row keeps working; an encrypted value that fails to decrypt (wrong key, tampering) fails loud on the AI path rather than calling a paid API with a garbage key. A one-shot backfill (`scripts/backfill-coach-settings-secrets.ts`) encrypts existing plaintext rows under a compare-and-swap so a concurrent save is never clobbered, and authenticates every existing envelope before it writes anything.
+
+### Fixed
+Found by the pre-merge review army, before any of it reached production:
+- Saving a new key when the encryption key is misconfigured now returns a clear error instead of an opaque 500.
+- Re-submitting an already-encrypted value no longer double-wraps it into an unusable key.
+- The displayed mask is derived from one shared prefix, so the "don't re-save the mask" guard can't drift from the mask the API emits.
+
 ## [0.3.0.0] - 2026-07-20
 
 The sales pipeline. CoachIQ now tracks who you're talking to before they become a client, so "lead → client → revenue" lives in one system instead of a tracker document nobody else can see. Deliberately manual: nothing here captures a prospect for you, because the team asked to trust the process before automating it.

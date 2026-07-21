@@ -1,13 +1,17 @@
 import { prisma } from "@/lib/db";
+import { readCoachSecret } from "@/lib/coach-secrets";
 
 /**
  * Get the active OpenAI API key.
  * Checks CoachSettings first (Todd's key), falls back to env var.
+ *
+ * The stored key is decrypted through readCoachSecret, which tolerates a
+ * legacy plaintext row that predates encryption.
  */
 export async function getOpenAIKey(): Promise<string> {
   const settings = await prisma.coachSettings.findFirst();
   const key =
-    settings?.openaiApiKey ||
+    readCoachSecret(settings?.openaiApiKey) ||
     process.env.OPEN_AI_API ||
     process.env.OPENAI_API_KEY;
   if (!key) throw new Error("No OpenAI API key configured");
@@ -19,7 +23,7 @@ export async function getOpenAIKey(): Promise<string> {
  */
 export async function getAnthropicKey(): Promise<string> {
   const settings = await prisma.coachSettings.findFirst();
-  const key = settings?.anthropicApiKey || process.env.ANTHROPIC_API_KEY;
+  const key = readCoachSecret(settings?.anthropicApiKey) || process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error("No Anthropic API key configured");
   return key;
 }

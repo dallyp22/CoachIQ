@@ -148,10 +148,11 @@ export function SettingsForm() {
         </Section>
 
         {/* AI API Keys */}
-        {/* NOTE: these practice-level keys are stored as plaintext, unlike the
-            per-coach Fathom secrets which go through src/lib/secrets.ts. The
-            copy below must not claim otherwise until the backfill TODO lands. */}
-        <Section title="AI API Keys" description="Used for session synopses, prep briefs, semantic search, and embeddings. Only the last four characters are shown once saved.">
+        {/* These practice-level keys are encrypted at rest via src/lib/secrets.ts
+            (AES-256-GCM), the same envelope the per-coach Fathom secrets use.
+            The API only ever returns a "•••1234" mask; the raw key never leaves
+            the server after it is saved. */}
+        <Section title="AI API Keys" description="Used for session synopses, prep briefs, semantic search, and embeddings. Stored encrypted at rest; only the last four characters are shown once saved.">
           <div className="grid grid-cols-1 gap-4">
             <Field
               label="OpenAI API Key"
