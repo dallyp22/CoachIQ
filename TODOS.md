@@ -46,31 +46,6 @@
 
 ## Billing Follow-ups (post-overhaul)
 
-### Wire up Vitest integration tests against test Neon branch
-**What:** Lane C shipped pure-function unit tests (43 tests across cadence math + snapshot/detectDrift). The DB-touching code paths still have zero test coverage: `generateInvoiceForClient` (advisory lock + retainer math + snapshot persistence + sequence allocation), `/api/admin/billing/reset` (transactional rollback semantics), `allocateInvoiceNumber` (collision under concurrent runs).
-**Why:** These are the highest-blast-radius surfaces. A bug here shows up as bad invoices going to real clients.
-**Fix path:** Spin up a separate Neon branch (`coachiq-test`), set `DATABASE_URL_TEST` env, add a Vitest setup file that runs `prisma migrate deploy` against it before the suite and resets between tests via a transactional wrapper (open transaction → run test logic → rollback). ~15-20 integration tests.
-**Depends on:** Nothing.
-**Added:** 2026-04-16 via Lane C (intentional scope cut to ship sooner).
-
-### Shadow pgvector columns in schema.prisma to prevent accidental drop
-**What:** `transcripts.embedding vector(1536)` and `transcripts.search_text` are managed via raw SQL outside Prisma (per the comment at `prisma/schema.prisma:166-167`). Prisma doesn't see them. Any future `prisma migrate dev` run will detect them as "drift" and try to DROP them — destroying 602+ rows of expensive pgvector embeddings + full-text search data.
-**Why:** Discovered during the billing overhaul migration generation on 2026-04-16: `prisma migrate dev` warned "You are about to drop the column `embedding` on the `transcripts` table, which still contains 602 non-null values." This is a latent footgun on the project. The billing migration was hand-written to avoid the drop, but the next dev who runs `prisma migrate dev` could lose the data unless this is fixed.
-**Fix:** Add to `Transcript` model in schema.prisma:
-```prisma
-embedding   Unsupported("vector(1536)")?
-search_text String?
-```
-Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up migration confirming Prisma sees the existing columns (no-op SQL).
-**Depends on:** Nothing.
-**Added:** 2026-04-16 via /plan-eng-review (billing overhaul) — surfaced as side discovery.
-
-### Encrypt CoachSettings secret keys
-**What:** `CoachSettings.stripeSecretKey`, `openaiApiKey`, `anthropicApiKey` are stored as plain strings in Postgres (`prisma/schema.prisma:240,247-248`). Move to Vercel env vars OR use Stripe Restricted Keys with read-only scope; for OpenAI/Anthropic, prefer env vars + KMS-style envelope encryption if DB storage is required.
-**Why:** A DB leak (Neon mirror, backup file, accidental dump) grants full account access today. The billing system makes this a bigger target.
-**Depends on:** Nothing. Standalone PR, ~1hr.
-**Added:** 2026-04-16 via /plan-eng-review (billing overhaul)
-
 ### Screen-reader walkthrough of billing UI
 **What:** Post-ship accessibility verification with VoiceOver (macOS) and NVDA (Windows) on the live billing surfaces — Billing tab, Clean-slate modal (focus trap + announcement), Draft invoice card with snapshot banner (`role="status"`), and the typed-confirmation flow.
 **Why:** Plan specs all the ARIA + focus + contrast rules, but live verification catches edge cases the spec can't predict — focus order through the cadence reveal, screen-reader pronunciation of "$1,000.00" (does it say "one thousand dollars"?), modal entry timing relative to backdrop fade.
@@ -194,15 +169,7 @@ Then `prisma migrate dev` will see them and leave them alone. Plus a follow-up m
 **Fix path:** Read the resolved token values at runtime (`getComputedStyle(document.documentElement).getPropertyValue('--success')`) and pass those to Recharts, re-reading on theme change; or define a small chart palette with explicit light/dark pairs.
 **Added:** 2026-07-19 via /plan-design-review follow-up sweep.
 
-## Multi-Coach Follow-ups (from 2026-07-19 plan-eng-review; foundation not yet built)
-
-### No way to create a client in the product — blocks Kurt onboarding
-**Priority:** P0 — **SCHEDULED into multi-coach foundation Phase 4** (2026-07-19), not awaiting triage.
-**What:** There is no client-creation path anywhere: no `POST /api/clients`, no server action, no UI. Verified 2026-07-19 — the only `prisma.client.create` calls are in `scripts/migrate-clients.ts` (the one-time v1 registry import that loaded Todd's 86 clients) and `scripts/seed-test-invoice.ts`. The Fathom webhook never creates clients either; unmatched recordings go to Pending Review.
-**Why it matters:** The Kurt onboarding checklist item #5 is "Client list w/ session emails — we enter them," and the foundation plan's Phase 6 QA says "Enter Kurt's clients with rates." Neither is possible today. Adding a coach without a way to add their clients produces an account that can never receive a matched recording.
-**Fix path:** `POST /api/clients` + Add Client form + bulk paste, scoped to the resolved coach, pre-filling `hourlyRate` from that coach's `defaultHourlyRate` (this is where the finding-15 rate default actually lands). Full spec in the build plan's Phase 4 (~1 day).
-**Depends on:** Phase 2 authz (done — needs the resolved coach for scoping).
-**Added:** 2026-07-19 during Phase 2 build — plan gap, not covered by any existing phase.
+## Multi-Coach Follow-ups (foundation SHIPPED v0.2.0.0 2026-07-19)
 
 ### My Settings self-serve tier + coach edit/deactivate UI
 **Priority:** P2
@@ -294,6 +261,48 @@ The repo has no E2E framework and zero `.tsx` has ever been tested. The pure log
 **Depends on:** Phase 4 NLM worker migration.
 **Added:** 2026-03-28 via /plan-eng-review
 
+## Secrets Follow-ups (from the 2026-07-20 encryption ship, v0.3.1.0)
+
+### Key-rotation / rekey path for encrypted secrets
+**Priority:** P2
+**What:** There is no way to rotate `COACHIQ_SECRETS_KEY`. The `"v1:"` prefix is a format version, not a key id, and `encryptSecret` always uses the current key. If the key is ever rotated or lost, every existing envelope (CoachSettings AND the per-coach `Coach.fathomApiKey`/`fathomWebhookSecret` from v0.2.0.0) becomes undecryptable, and the failure is silent + asymmetric: `getOpenAIKey`/`getAnthropicKey` throw (AI features down), `webhook-coach.ts` `secretOf` returns null → Fathom recordings dropped with no retry, while the Settings page still renders healthy `•••` masks because `maskCoachSecret` swallows the decrypt error.
+**Why:** Turns a routine key rotation or a lost env var into silent, partly-unrecoverable outage. Pre-existing (the v0.2.0.0 columns already had this), surfaced by the v0.3.1.0 adversarial review.
+**Fix path:** A `scripts/rekey-secrets.ts` (decrypt-under-old-key → re-encrypt-under-new, both keys passed in), and/or a key-id in the envelope (`v1:<kid>:…`) so mixed-key states are expressible. Consider surfacing a decrypt-error state in the Settings response instead of a normal mask so the "looks healthy while broken" gap closes.
+**Added:** 2026-07-20 via /ship adversarial review (encryption ship).
+
+### Settings secret inputs: mask-append silently drops a key rotation
+**Priority:** P3
+**What:** `settings-form.tsx` binds the GET mask (`•••1234`) as the input `value`. If an admin edits by appending to the shown mask instead of clearing it, the submitted value still starts with `•••`, so `isMasked()` skips it and the new key is silently discarded — a rotation appears to succeed while the old key stays active. Also: a secret can't be cleared back to `null` through PATCH (empty string is falsy, so it's skipped).
+**Why:** Silent no-op on a security-relevant action (key rotation). Pre-existing (carried from the old `startsWith("•••")` check), flagged by the v0.3.1.0 security + adversarial reviews.
+**Fix path:** Render secret inputs empty with the mask shown as placeholder/adornment only, so any typed value is a real new key; and/or add an explicit "clear" affordance that sends a sentinel the route maps to null.
+**Added:** 2026-07-20 via /ship review army (encryption ship).
+
 ## Completed
 
-(Ship moves finished items here with their completion version.)
+### Encrypt CoachSettings secret keys
+**Completed:** v0.3.1.0 (2026-07-20)
+The four secret columns (`openaiApiKey`, `anthropicApiKey`, `stripeSecretKey`, `fathomWebhookSecret`) now go through the AES-256-GCM envelope (`src/lib/secrets.ts`) via a new `src/lib/coach-secrets.ts` helper: encrypt-on-write in `settings/route.ts`, decrypt-tolerant read in `ai.ts`, decrypt-then-mask on every secret column in the GET/PATCH responses (which also closed a raw `fathomWebhookSecret` leak in the response spread). One-shot backfill (`scripts/backfill-coach-settings-secrets.ts`) with authenticate-first + per-column compare-and-swap. Openai/anthropic are the live consumers; stripe/fathom columns are protected-at-rest but dormant. Remaining secrets work filed under "Secrets Follow-ups" above. **Backfill must be rehearsed on a Neon branch and run against prod per Handoff §4 — not yet run.**
+
+### Sales Pipeline module
+**Completed:** v0.3.0.0 (2026-07-20)
+Prospects, activities, stages, reports, convert-to-client. Full data model, 7 API routes, and UI. Migrated to production (86 clients / 714 sessions / 711 embeddings unchanged). 14 follow-up items filed under "Pipeline Follow-ups" above.
+
+### No way to create a client in the product — blocks Kurt onboarding
+**Completed:** v0.2.0.0 (2026-07-19)
+Was a P0. `POST /api/clients` + Add Client form + bulk paste shipped, scoped to the resolved coach, pre-filling `hourlyRate` from the coach's `defaultHourlyRate`. This was the gating item for onboarding any second coach.
+
+### Multi-coach foundation
+**Completed:** v0.2.0.0 (2026-07-19)
+Coach model + OWNER/ADMIN/COACH roles, `requireCoach()` authz + full read-site scoping, coach-aware Fathom ingress with per-coach HMAC, AES-256-GCM secrets helper (`src/lib/secrets.ts`), Coaches settings section + Add Coach flow with Clerk invites. Phases 0–4 of PRD §12. **Phases 5 (cron coach-iteration) and 6 (Kurt dry-run) are NOT done** — see "Multi-Coach Follow-ups" and the note in the Handoff section below.
+
+### Shadow pgvector columns in schema.prisma to prevent accidental drop
+**Completed:** v0.2.0.0 (2026-07-19)
+`transcripts.embedding` and `transcripts.search_text` are now declared `Unsupported(...)` in `prisma/schema.prisma:359-360`, so `prisma migrate dev` sees them and won't propose dropping 711 rows of paid embeddings. The pipeline migration's schema comment documents the same hazard for the new partial unique index.
+
+### Wire up Vitest integration tests against a test Neon branch
+**Completed:** v0.3.0.0 (2026-07-20)
+`npm run test:runtime` runs the `tests/api/pipeline/*.runtime.test.ts` suites (64 tests) against a real Neon branch with `PIPELINE_RUNTIME_TESTS=1` + `DATABASE_URL`. Pattern (`--no-file-parallelism`, scope counts to suite-created rows because the branch is a prod clone) documented in `tests/api/pipeline/README.md`. **Note:** the original ask was about the *billing* DB paths (`generateInvoiceForClient`, `/api/admin/billing/reset`, `allocateInvoiceNumber`) — those specific surfaces still lack integration tests, so a narrower "billing integration tests" item may be worth re-filing if that coverage matters.
+
+### Twice-daily cron consolidation
+**Completed:** v0.1.1.0 (2026-07-19)
+Shared cron auth + extracted brief-delivery lib; calendar-sync and deliver-briefs folded into workday-sync. Follow-ups filed under "Cron / Compute Follow-ups" above.
