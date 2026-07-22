@@ -277,6 +277,36 @@ The repo has no E2E framework and zero `.tsx` has ever been tested. The pure log
 **Fix path:** Render secret inputs empty with the mask shown as placeholder/adornment only, so any typed value is a real new key; and/or add an explicit "clear" affordance that sends a sentinel the route maps to null.
 **Added:** 2026-07-20 via /ship review army (encryption ship).
 
+## Multi-Coach Cron Follow-ups (from the 2026-07-22 Phase 5 ship)
+
+### Namespace calendarEventId per calendar (global-unique underbilling)
+**Priority:** P2
+**What:** `Session.calendarEventId` is globally unique, but Google event IDs are unique only per calendar and are shared across attendees' copies of an invitation. When two coaches' calendars carry the same event ID (a genuinely shared meeting with clients of both coaches), the first-synced coach owns the only Session/TimeEntry and the later coach is silently `skipped` — nondeterministic underbilling, not a crash.
+**Why:** Rare for 1-coach-1-client coaching sessions (the only events that create billable time, and they're title-filtered), but real and worsens as coach count grows. Flagged by the Phase 5 adversarial review.
+**Fix path:** Add `coachId` (or `calendarId`) to `Session`, make the uniqueness + the sync's `findUnique` dedup composite `(coachId, calendarEventId)`. Schema migration — rehearse on a Neon branch per Handoff §4.
+**Added:** 2026-07-22 via /ship adversarial review (Phase 5).
+
+### Hard-enforce the cron deadline (cancellation) + fair per-coach budgeting
+**Priority:** P2
+**What:** `workday-sync` now shares one 270s deadline across calendar-sync + brief delivery, checked cooperatively between coaches/events. Two gaps: (1) an in-flight Calendar or LLM `fetch` isn't cancellation-bounded, so a single slow call can cross the 300s function cap; (2) coaches are processed oldest-first, so if the first coach exhausts the budget, later coaches are always starved and — since brief recovery only looks back 60min while runs are 6h apart — their sessions age out to manual-only.
+**Why:** Neither bites a 2-coach practice (calendar-sync is seconds; a run rarely has enough sessions to exhaust 270s), but both are systematic at scale. Flagged by the Phase 5 adversarial review.
+**Fix path:** Bound external calls with `AbortController` tied to the deadline; give each coach a fair slice of the remaining budget (or a durable continuation cursor) instead of first-come-all.
+**Added:** 2026-07-22 via /ship adversarial review (Phase 5).
+
+### Reject cross-client email-alias collisions per coach
+**Priority:** P3
+**What:** Client uniqueness is only `(coachId, primary email)`. Secondary emails aren't checked against other clients' addresses, and calendar-sync / brief matching build a last-write-wins email→client map. Two clients under one coach sharing an alias can mint a Session/TimeEntry or brief against the wrong client. Pre-existing (not introduced by Phase 5); within one coach's tenant, never cross-coach.
+**Why:** Billing misattribution within a coach's book. Flagged by the Phase 5 adversarial review as pre-existing.
+**Fix path:** Enforce alias uniqueness per coach on client create/update, or fail closed when building the match map instead of overwriting.
+**Added:** 2026-07-22 via /ship adversarial review (Phase 5).
+
+### Per-coach calendar/settings editing UI
+**Priority:** P2
+**What:** The legacy practice Settings form still edits calendar config (googleCalendarId, coachingTitleFilter) that Phase 5 reads from the Coach row; the PATCH mirrors those onto the *founding* coach as a bridge. A non-founding coach (e.g. Kurt) has no UI to edit their own calendar after Add Coach, and the owner editing Settings only affects the founder's row.
+**Why:** The mirror is a bridge, not the real model — per-coach config should be edited per-coach. Ties into the already-filed "coach edit/deactivate UI" P2.
+**Fix path:** Add per-coach calendar/title-filter editing in the Coaches section; once it exists, drop the calendar fields from the practice Settings form and the founder-mirror.
+**Added:** 2026-07-22 via /ship adversarial review (Phase 5).
+
 ## Completed
 
 ### Encrypt CoachSettings secret keys

@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   settingsFindFirst: vi.fn(),
   settingsCreate: vi.fn(),
   settingsUpdate: vi.fn(),
+  coachFindFirst: vi.fn(),
+  coachUpdate: vi.fn(),
+  transaction: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -19,6 +22,8 @@ vi.mock("@/lib/db", () => ({
       create: mocks.settingsCreate,
       update: mocks.settingsUpdate,
     },
+    coach: { findFirst: mocks.coachFindFirst, update: mocks.coachUpdate },
+    $transaction: mocks.transaction,
   },
 }));
 vi.mock("@/lib/authz", () => ({
@@ -60,6 +65,10 @@ beforeEach(() => {
     ...EXISTING,
     ...(data as object),
   }));
+  mocks.coachFindFirst.mockResolvedValue({ id: "owner-1" });
+  mocks.coachUpdate.mockResolvedValue({});
+  // The route batches its writes; the mock just resolves them together.
+  mocks.transaction.mockImplementation(async (writes: Promise<unknown>[]) => Promise.all(writes));
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -172,5 +181,38 @@ describe("GET /api/settings — masks encrypted keys, never leaks them", () => {
     const res = await GET();
     expect(res.status).toBe(200);
     expect(mocks.settingsCreate).toHaveBeenCalledOnce();
+  });
+});
+
+describe("PATCH /api/settings — mirrors calendar config onto the founding owner Coach row", () => {
+  // Phase 5: the crons read the owner's Coach row, not this singleton, so an
+  // edit here must reach the Coach row or sync silently keeps using stale config.
+  it("syncs googleCalendarId and coachingTitleFilter to the FOUNDING owner (by id)", async () => {
+    await PATCH(patch({ googleCalendarId: "cal-new", coachingTitleFilter: "1:1" }));
+    // Founding coach resolved as the oldest Coach row (immutable createdAt, id
+    // tie-breaker) — NOT by mutable role, and targeted by id, not a role-wide
+    // updateMany that would clobber another owner.
+    expect(mocks.coachFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: [{ createdAt: "asc" }, { id: "asc" }] })
+    );
+    expect(mocks.coachFindFirst.mock.calls[0][0].where).toBeUndefined();
+    expect(mocks.coachUpdate).toHaveBeenCalledWith({
+      where: { id: "owner-1" },
+      data: { googleCalendarId: "cal-new", coachingTitleFilter: "1:1" },
+    });
+    // Both writes go through the same transaction.
+    expect(mocks.transaction).toHaveBeenCalledOnce();
+  });
+
+  it("does NOT clobber workEmails when coachEmail is edited (Fathom routing is safe)", async () => {
+    await PATCH(patch({ coachEmail: "todd.new@example.com" }));
+    // coachEmail is not a calendar-driving field, so it must not reach the Coach row.
+    expect(mocks.coachUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not touch the Coach row when no calendar field is edited", async () => {
+    await PATCH(patch({ openaiApiKey: "sk-openai-plaintext" }));
+    expect(mocks.coachUpdate).not.toHaveBeenCalled();
+    expect(mocks.coachFindFirst).not.toHaveBeenCalled();
   });
 });

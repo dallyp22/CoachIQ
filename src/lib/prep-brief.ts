@@ -12,6 +12,9 @@ export async function generatePrepBrief(
   const client = await prisma.client.findUnique({
     where: { id: clientId },
     include: {
+      // The owning coach's name — briefs are addressed to whoever coaches this
+      // client, not a hardcoded name, so a second coach's briefs read correctly.
+      coach: { select: { name: true } },
       sessions: {
         where: { synopsis: { not: null } },
         orderBy: { date: "desc" },
@@ -22,6 +25,7 @@ export async function generatePrepBrief(
   });
 
   if (!client) throw new Error("Client not found");
+  const coachName = client.coach?.name?.trim() || "the coach";
   if (client.sessions.length === 0) {
     throw new Error("No sessions with synopses available");
   }
@@ -55,13 +59,13 @@ export async function generatePrepBrief(
       messages: [
         {
           role: "system",
-          content: `You are a coaching intelligence assistant preparing a pre-session brief for executive coach Todd Zimbelman. Generate a structured prep brief that helps Todd walk into his next coaching session fully prepared.
+          content: `You are a coaching intelligence assistant preparing a pre-session brief for executive coach ${coachName}. Generate a structured prep brief that helps ${coachName} walk into their next coaching session fully prepared.
 
 Format the brief with these sections:
 **Last Session Recap** — 2-3 sentences summarizing the most recent session
 **Open Commitments** — bullet list of action items the client committed to (flag any overdue)
 **Patterns to Watch** — 2-3 recurring themes or behavioral patterns across recent sessions
-**Suggested Focus Areas** — 2-3 specific topics or questions Todd should explore in the upcoming session
+**Suggested Focus Areas** — 2-3 specific topics or questions ${coachName} should explore in the upcoming session
 
 Write in second person ("you discussed...", "consider asking about..."). Be specific and actionable. Use the client's first name. Keep the total brief under 300 words.`,
         },

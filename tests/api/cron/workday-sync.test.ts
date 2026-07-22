@@ -114,6 +114,18 @@ describe("GET /api/cron/workday-sync — happy path", () => {
     expect(timeMax.getTime() - timeMin.getTime()).toBe(96 * 60 * 60 * 1000);
   });
 
+  it("passes ONE shared deadline (~270s out) to both calendar sync and brief delivery", async () => {
+    const before = Date.now();
+    await GET(makeRequest("Bearer test-secret"));
+    const syncDeadline = mocks.syncCalendarSessions.mock.calls[0][2];
+    const briefsDeadline = mocks.deliverDueBriefs.mock.calls[0][0];
+    expect(typeof syncDeadline).toBe("number");
+    // Same budget spans both phases, so the cron's 300s isn't granted twice.
+    expect(briefsDeadline).toBe(syncDeadline);
+    expect(syncDeadline - before).toBeGreaterThan(250_000);
+    expect(syncDeadline - before).toBeLessThanOrEqual(270_000 + 1000);
+  });
+
   it("reports partial (200) when calendar sync returns per-event errors", async () => {
     mocks.syncCalendarSessions.mockResolvedValue({
       ...SYNC_RESULT,

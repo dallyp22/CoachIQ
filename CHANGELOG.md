@@ -3,6 +3,20 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.3.2.0] - 2026-07-22
+
+Multi-coach calendar automation. The nightly crons — calendar sync, prep briefs, and the daily briefing — read a single practice-wide calendar, so a second coach's sessions were silently invisible to all of them. They now run per coach: each coach's own calendar is matched against only that coach's clients, so onboarding a second coach gives them working calendar sync, prep briefs, and a daily brief — not just Fathom recordings.
+
+### Changed
+- **Calendar sync runs per coach.** Each coach's calendar events are matched against that coach's own clients (never the whole practice), so a coach's meeting can't mint a session or billable time on another coach's client. Non-Fathom clients get sessions and unbilled time entries from calendar events, exactly as before — now for every coach, not just the owner.
+- **Prep briefs and the daily brief are per coach.** Briefs are generated for each coach's upcoming sessions from their own calendar, and are now addressed to whoever coaches that client by name, instead of hardcoding one coach.
+- **The workday cron shares one time budget** across calendar sync and brief delivery (rather than granting each the full window), and processes coaches in a stable order.
+- **Editing the practice calendar in Settings now reaches the crons.** The owner's calendar id and title filter, edited in the existing Settings form, are mirrored onto the owner's coach record — the source the crons now read — in one transaction.
+
+### Notes
+- No schema change: every per-coach field already existed from the multi-coach foundation (v0.2.0.0).
+- Known follow-ups filed in TODOS.md: per-calendar `calendarEventId` namespacing for shared meetings, hard deadline cancellation + fair per-coach budgeting at scale, and a per-coach calendar-editing UI.
+
 ## [0.3.1.0] - 2026-07-20
 
 Practice-level secrets are encrypted at rest. The API keys stored in Settings sat in the database as plaintext, so any copy of it — a Neon branch, a backup, an accidental dump — handed over live Stripe, OpenAI, and Anthropic credentials. They now go through the same AES-256-GCM envelope the per-coach Fathom secrets already used, and the Settings page's claim that they're "encrypted at rest" is finally true.

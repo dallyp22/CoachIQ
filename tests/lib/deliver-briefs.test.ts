@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   coachSettingsFindFirst: vi.fn(),
+  coachFindMany: vi.fn(),
   clientFindMany: vi.fn(),
   prepBriefFindFirst: vi.fn(),
   eventsList: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({
   prisma: {
     coachSettings: { findFirst: mocks.coachSettingsFindFirst },
+    coach: { findMany: mocks.coachFindMany },
     client: { findMany: mocks.clientFindMany },
     prepBrief: { findFirst: mocks.prepBriefFindFirst },
   },
@@ -28,15 +30,38 @@ vi.mock("@/lib/prep-brief", () => ({
   generatePrepBrief: mocks.generatePrepBrief,
 }));
 
+// resolveCoachConfig is NOT mocked — the real one runs, so these tests also
+// verify that a coach's own calendar id, title filter, and email set drive the
+// per-coach fetch/match.
 import { deliverDueBriefs } from "@/lib/deliver-briefs";
 
-const COACH_EMAIL = "coach@cocreate.com";
-
-const baseSettings = {
-  googleCalendarId: "cal-1",
+// Practice-wide defaults. Calendar id / title filter / coach email now live on
+// the COACH, resolved over these fallbacks by resolveCoachConfig.
+const settings = {
   briefDeliveryMinutes: 30,
   coachingTitleFilter: "coaching",
-  coachEmail: COACH_EMAIL,
+  timezone: "America/Chicago",
+  defaultHourlyRate: null,
+};
+
+const coachA = {
+  id: "coach-a",
+  loginEmail: "coach@cocreate.com",
+  workEmails: [] as string[],
+  googleCalendarId: "cal-a",
+  coachingTitleFilter: "coaching",
+  calendarSyncEnabled: true,
+  defaultHourlyRate: null,
+};
+
+const coachB = {
+  id: "coach-b",
+  loginEmail: "kurt@cocreate.com",
+  workEmails: [] as string[],
+  googleCalendarId: "cal-b",
+  coachingTitleFilter: "coaching",
+  calendarSyncEnabled: true,
+  defaultHourlyRate: null,
 };
 
 const clientA = {
@@ -44,6 +69,13 @@ const clientA = {
   email: "alice@example.com",
   secondaryEmails: ["alice.work@corp.com"],
   sessionCount: 5,
+};
+
+const clientB = {
+  id: "client-b",
+  email: "bob@example.com",
+  secondaryEmails: [] as string[],
+  sessionCount: 3,
 };
 
 function makeEvent(opts: {
@@ -63,19 +95,35 @@ function makeEvent(opts: {
 
 function arrange(opts: {
   settings?: unknown;
+  coaches?: unknown[];
   credentials?: boolean;
   events?: unknown[];
+  eventsByCalendar?: Record<string, unknown[]>;
   clients?: unknown[];
+  clientsByCoach?: Record<string, unknown[]>;
   existingBrief?: unknown;
 } = {}) {
   mocks.coachSettingsFindFirst.mockResolvedValue(
-    "settings" in opts ? opts.settings : baseSettings
+    "settings" in opts ? opts.settings : settings
   );
+  mocks.coachFindMany.mockResolvedValue(opts.coaches ?? [coachA]);
   mocks.hasCalendarCredentials.mockReturnValue(opts.credentials ?? true);
-  mocks.eventsList.mockResolvedValue({ data: { items: opts.events ?? [] } });
+  if (opts.eventsByCalendar) {
+    mocks.eventsList.mockImplementation(async ({ calendarId }: { calendarId: string }) => ({
+      data: { items: opts.eventsByCalendar![calendarId] ?? [] },
+    }));
+  } else {
+    mocks.eventsList.mockResolvedValue({ data: { items: opts.events ?? [] } });
+  }
   // Pass-through by default so tests control the event set directly
   mocks.filterCoachingEvents.mockImplementation((events: unknown[]) => events);
-  mocks.clientFindMany.mockResolvedValue(opts.clients ?? [clientA]);
+  if (opts.clientsByCoach) {
+    mocks.clientFindMany.mockImplementation(async ({ where }: { where: { coachId: string } }) =>
+      opts.clientsByCoach![where.coachId] ?? []
+    );
+  } else {
+    mocks.clientFindMany.mockResolvedValue(opts.clients ?? [clientA]);
+  }
   mocks.prepBriefFindFirst.mockResolvedValue(opts.existingBrief ?? null);
   mocks.generatePrepBrief.mockResolvedValue(undefined);
 }
@@ -92,32 +140,78 @@ afterEach(() => {
 });
 
 describe("deliverDueBriefs — configuration guards", () => {
-  it("skips when no coach settings row exists", async () => {
-    arrange({ settings: null });
+  it("skips when no coach has a configured calendar", async () => {
+    arrange({ coaches: [] });
     const result = await deliverDueBriefs();
     expect(result).toEqual({ status: "skipped", reason: "Calendar not configured" });
     expect(mocks.eventsList).not.toHaveBeenCalled();
   });
 
-  it("skips when googleCalendarId is not set", async () => {
-    arrange({ settings: { ...baseSettings, googleCalendarId: null } });
+  it("skips a coach in-loop when its resolved googleCalendarId is null", async () => {
+    arrange({ coaches: [{ ...coachA, googleCalendarId: null }] });
     const result = await deliverDueBriefs();
     expect(result.status).toBe("skipped");
     expect(mocks.eventsList).not.toHaveBeenCalled();
   });
 
-  it("skips when calendar credentials are missing", async () => {
+  it("skips a coach whose calendarSyncEnabled is false", async () => {
+    arrange({ coaches: [{ ...coachA, calendarSyncEnabled: false }] });
+    const result = await deliverDueBriefs();
+    expect(result.status).toBe("skipped");
+    expect(mocks.eventsList).not.toHaveBeenCalled();
+  });
+
+  it("skips when calendar credentials are missing (before touching coaches)", async () => {
     arrange({ credentials: false });
     const result = await deliverDueBriefs();
     expect(result).toEqual({ status: "skipped", reason: "Calendar not configured" });
     expect(mocks.eventsList).not.toHaveBeenCalled();
+    expect(mocks.coachFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("deliverDueBriefs — multi-coach iteration and isolation", () => {
+  it("processes each coach's OWN calendar and only that coach's clients", async () => {
+    arrange({
+      coaches: [coachA, coachB],
+      eventsByCalendar: {
+        "cal-a": [makeEvent({ attendees: [{ email: clientA.email }] })],
+        "cal-b": [makeEvent({ attendees: [{ email: clientB.email }] })],
+      },
+      clientsByCoach: { "coach-a": [clientA], "coach-b": [clientB] },
+    });
+    const result = await deliverDueBriefs();
+    expect(result).toEqual({ status: "completed", generated: 2, skipped: 0, failed: 0, errors: [] });
+
+    // Each coach's own calendar was fetched...
+    const calendarIds = mocks.eventsList.mock.calls.map((c) => c[0].calendarId).sort();
+    expect(calendarIds).toEqual(["cal-a", "cal-b"]);
+    // ...and the client query was scoped to each coach's id.
+    const coachIds = mocks.clientFindMany.mock.calls.map((c) => c[0].where.coachId).sort();
+    expect(coachIds).toEqual(["coach-a", "coach-b"]);
+    expect(mocks.generatePrepBrief).toHaveBeenCalledWith("client-a", expect.any(Date));
+    expect(mocks.generatePrepBrief).toHaveBeenCalledWith("client-b", expect.any(Date));
+  });
+
+  it("does NOT brief another coach's client that appears on this coach's calendar", async () => {
+    // coachA's calendar has an event whose only attendee is coachB's client.
+    // Because coachA's client query is scoped to coach-a, there is no match —
+    // the tenant boundary. A global client load would wrongly brief client-b.
+    arrange({
+      coaches: [coachA],
+      eventsByCalendar: { "cal-a": [makeEvent({ attendees: [{ email: clientB.email }] })] },
+      clientsByCoach: { "coach-a": [clientA] },
+    });
+    const result = await deliverDueBriefs();
+    expect(result).toEqual({ status: "completed", generated: 0, skipped: 1, failed: 0, errors: [] });
+    expect(mocks.generatePrepBrief).not.toHaveBeenCalled();
   });
 });
 
 describe("deliverDueBriefs — lookahead window", () => {
   it("floors the lookahead at 6.5h and looks back 1h for failed-run recovery", async () => {
     const before = Date.now();
-    arrange({ settings: { ...baseSettings, briefDeliveryMinutes: 30 } });
+    arrange({ settings: { ...settings, briefDeliveryMinutes: 30 } });
     await deliverDueBriefs();
     const args = mocks.eventsList.mock.calls[0][0];
     const windowMs =
@@ -128,24 +222,21 @@ describe("deliverDueBriefs — lookahead window", () => {
     const lookbackMs = before - new Date(args.timeMin).getTime();
     expect(lookbackMs).toBeGreaterThanOrEqual(60 * 60 * 1000 - 5000);
     expect(lookbackMs).toBeLessThanOrEqual(60 * 60 * 1000 + 5000);
-    expect(args.calendarId).toBe("cal-1");
+    expect(args.calendarId).toBe("cal-a");
     // Without the cap the Google default (250) applies and the truncation
     // warning below becomes unreachable in practice.
     expect(args.maxResults).toBe(25);
   });
 
-  it("passes the raw event list and the coaching title filter to filterCoachingEvents", async () => {
+  it("passes the raw event list and the coach's title filter to filterCoachingEvents", async () => {
     const events = [makeEvent({ attendees: [{ email: clientA.email }] })];
     arrange({ events });
     await deliverDueBriefs();
-    expect(mocks.filterCoachingEvents).toHaveBeenCalledWith(
-      events,
-      baseSettings.coachingTitleFilter
-    );
+    expect(mocks.filterCoachingEvents).toHaveBeenCalledWith(events, "coaching");
   });
 
   it("uses briefDeliveryMinutes when it exceeds the 6.5h floor", async () => {
-    arrange({ settings: { ...baseSettings, briefDeliveryMinutes: 600 } });
+    arrange({ settings: { ...settings, briefDeliveryMinutes: 600 } });
     // Also cover the missing-items fallback: Google can return data with no items
     mocks.eventsList.mockResolvedValue({ data: {} });
     const result = await deliverDueBriefs();
@@ -204,10 +295,8 @@ describe("deliverDueBriefs — client matching", () => {
     expect(mocks.generatePrepBrief).toHaveBeenCalledTimes(1);
   });
 
-  it("matches a client via a secondary email (case-insensitive, coachEmail unset)", async () => {
+  it("matches a client via a secondary email (case-insensitive)", async () => {
     arrange({
-      // coachEmail null exercises the `?.toLowerCase() || ""` fallback
-      settings: { ...baseSettings, coachEmail: null },
       events: [makeEvent({ attendees: [{ email: "Alice.Work@Corp.com" }] })],
     });
     const result = await deliverDueBriefs();
@@ -215,13 +304,14 @@ describe("deliverDueBriefs — client matching", () => {
     expect(mocks.generatePrepBrief).toHaveBeenCalledWith("client-a", expect.any(Date));
   });
 
-  it("ignores the coach's own email and resource attendees when matching", async () => {
+  it("ignores the coach's own emails (login + work) and resource attendees when matching", async () => {
     arrange({
-      // Coach uses same address as a client would — must be excluded; room resource too
+      coaches: [{ ...coachA, workEmails: ["coach.alt@cocreate.com"] }],
       events: [
         makeEvent({
           attendees: [
-            { email: COACH_EMAIL },
+            { email: coachA.loginEmail },
+            { email: "coach.alt@cocreate.com" }, // a work email — also excluded
             { email: "room-1@resource.calendar.google.com", resource: true },
           ],
         }),
@@ -275,12 +365,6 @@ describe("deliverDueBriefs — dedup and generation", () => {
   });
 
   it("counts a generatePrepBrief failure as failed, surfaces the error, and continues", async () => {
-    const clientB = {
-      id: "client-b",
-      email: "bob@example.com",
-      secondaryEmails: [],
-      sessionCount: 3,
-    };
     arrange({
       clients: [clientA, clientB],
       events: [
@@ -321,12 +405,13 @@ describe("deliverDueBriefs — dedup and generation", () => {
 });
 
 describe("deliverDueBriefs — client eligibility query", () => {
-  it("only loads non-churned clients that have at least one synopsis-bearing session", async () => {
+  it("loads only this coach's non-churned, synopsis-bearing clients", async () => {
     arrange({ events: [] });
     await deliverDueBriefs();
     expect(mocks.clientFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
+          coachId: "coach-a",
           status: { not: "CHURNED" },
           sessions: { some: { synopsis: { not: null } } },
         },
@@ -337,7 +422,7 @@ describe("deliverDueBriefs — client eligibility query", () => {
 
 describe("deliverDueBriefs — limits and fallbacks", () => {
   it("falls back to a 30-minute floor input when briefDeliveryMinutes is null (window = 6.5h cap gap)", async () => {
-    arrange({ settings: { ...baseSettings, briefDeliveryMinutes: null } });
+    arrange({ settings: { ...settings, briefDeliveryMinutes: null } });
     await deliverDueBriefs();
     const args = mocks.eventsList.mock.calls[0][0];
     const windowMs =
@@ -358,7 +443,7 @@ describe("deliverDueBriefs — limits and fallbacks", () => {
     expect(result.status).toBe("completed");
     expect(result.skipped).toBe(25);
     expect(result.errors).toEqual([
-      "calendar window exceeded the 25-event cap — later sessions in the window may be missing briefs",
+      "coach coach@cocreate.com: calendar window exceeded the 25-event cap — later sessions in the window may be missing briefs",
     ]);
   });
 
@@ -371,7 +456,7 @@ describe("deliverDueBriefs — limits and fallbacks", () => {
     expect(result.errors).toEqual([]);
   });
 
-  it("stops generating when the time budget is exhausted and reports the deferral", async () => {
+  it("stops generating when the shared time budget is exhausted and reports the deferral", async () => {
     const startISO = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     arrange({
       events: [
@@ -379,10 +464,10 @@ describe("deliverDueBriefs — limits and fallbacks", () => {
         makeEvent({ startISO, attendees: [{ email: clientA.email }] }),
       ],
     });
-    // Date.now() call order inside deliverDueBriefs: startedAt, then one
-    // budget check per loop iteration. Let iteration 1 pass and iteration 2
-    // land past the 240s budget. (Events were created above, before the spy.)
-    const nowValues = [1_000, 1_000, 1_000 + 240_001];
+    // Date.now() call order: startedAt, the outer per-coach budget check, then
+    // one budget check per event. Let the first event through and the second
+    // land past the 240s budget. (Events were built above, before the spy.)
+    const nowValues = [1_000, 1_000, 1_000, 1_000 + 240_001];
     vi.spyOn(Date, "now").mockImplementation(
       () => nowValues.shift() ?? 1_000 + 240_001
     );
