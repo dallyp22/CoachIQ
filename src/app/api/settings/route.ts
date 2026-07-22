@@ -162,10 +162,46 @@ export async function PATCH(request: NextRequest) {
     updates.timezone = v;
   }
 
-  const updated = await prisma.coachSettings.update({
+  // Phase 5: the calendar-sync and brief crons read the FOUNDING owner's Coach
+  // row, not this singleton. Mirror the calendar-driving fields there so a change
+  // made in this legacy practice form actually reaches the crons. Deliberately
+  // ONLY googleCalendarId + coachingTitleFilter: workEmails drives Fathom
+  // routing and per-coach attendee exclusion, is managed in Add Coach, and must
+  // not be clobbered from here.
+  const ownerSync: Record<string, unknown> = {};
+  if (body.googleCalendarId !== undefined) {
+    ownerSync.googleCalendarId = body.googleCalendarId || null;
+  }
+  if (body.coachingTitleFilter !== undefined) {
+    ownerSync.coachingTitleFilter = body.coachingTitleFilter || null;
+  }
+
+  const settingsWrite = prisma.coachSettings.update({
     where: { id: settings.id },
     data: updates,
   });
+
+  let updated;
+  if (Object.keys(ownerSync).length > 0) {
+    // The founding coach is the oldest Coach row — the migration seeded the
+    // original practice owner first. Identify by IMMUTABLE createdAt (+id
+    // tie-breaker for same-instant rows), never by the mutable `role`: an owner
+    // can promote another and be demoted, which would move a role-based "oldest
+    // owner" onto a different coach and mis-target this mirror. Both writes
+    // commit in one transaction so a failed mirror can't leave the settings and
+    // the cron's config source disagreeing.
+    const owner = await prisma.coach.findFirst({
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true },
+    });
+    const writes = owner
+      ? ([settingsWrite, prisma.coach.update({ where: { id: owner.id }, data: ownerSync })] as const)
+      : ([settingsWrite] as const);
+    const results = await prisma.$transaction(writes as never);
+    updated = (results as unknown[])[0] as Awaited<typeof settingsWrite>;
+  } else {
+    updated = await settingsWrite;
+  }
 
   return NextResponse.json({
     status: "updated",

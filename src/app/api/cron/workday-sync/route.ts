@@ -35,12 +35,17 @@ export async function GET(request: NextRequest) {
   const now = new Date();
   const errors: string[] = [];
 
+  // One deadline for BOTH phases so calendar sync + brief delivery together stay
+  // inside maxDuration. 270s leaves ~30s of the 300s cap for the response and
+  // any in-flight request to unwind. Both phases stop starting new coaches past it.
+  const deadline = Date.now() + 270_000;
+
   // 1. Calendar sync — a failure here must not block brief delivery.
   let calendarSync: Awaited<ReturnType<typeof syncCalendarSessions>> | null = null;
   try {
     const timeMin = new Date(now.getTime() - SYNC_LOOKBACK_HOURS * 60 * 60 * 1000);
     const timeMax = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-    calendarSync = await syncCalendarSessions(timeMin, timeMax);
+    calendarSync = await syncCalendarSessions(timeMin, timeMax, deadline);
     // Per-event failures are caught inside syncCalendarSessions and returned
     // in its errors array — surface them so a run where events failed to
     // persist doesn't report as a clean "completed".
@@ -56,7 +61,7 @@ export async function GET(request: NextRequest) {
   // 2. Prep brief delivery
   let briefs: DeliverBriefsResult | null = null;
   try {
-    briefs = await deliverDueBriefs();
+    briefs = await deliverDueBriefs(deadline);
     // Per-brief failures (LLM outage, revoked key) are collected inside
     // deliverDueBriefs — surface them like calendar-sync's per-event errors
     // so a run of total brief failure doesn't report as clean.

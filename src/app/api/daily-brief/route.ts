@@ -6,6 +6,7 @@ import {
   scopeCoachId,
   clientWhere,
   viaClientWhere,
+  resolveCoachConfig,
   authzResponse,
 } from "@/lib/authz";
 import {
@@ -23,16 +24,38 @@ import {
  */
 export async function GET(request: NextRequest) {
   let coachId: string | null;
+  // The daily brief is one coach's day: their calendar + their clients. An
+  // OWNER/ADMIN with no ?coachId param gets their OWN brief (not a practice-wide
+  // merge), and can pass ?coachId=<other> to view another coach's day.
+  let briefCoachId: string;
   try {
     const coach = await requireCoach();
     coachId = scopeCoachId(coach, request.nextUrl.searchParams.get("coachId"));
+    briefCoachId = coachId ?? coach.id;
   } catch (err) {
     return authzResponse(err);
   }
 
   try {
     const settings = await prisma.coachSettings.findFirst();
-    if (!settings?.googleCalendarId || !hasCalendarCredentials()) {
+    const briefCoach = await prisma.coach.findUnique({
+      where: { id: briefCoachId },
+      select: {
+        id: true,
+        name: true,
+        loginEmail: true,
+        workEmails: true,
+        googleCalendarId: true,
+        coachingTitleFilter: true,
+        calendarSyncEnabled: true,
+        defaultHourlyRate: true,
+      },
+    });
+    const coachName = briefCoach?.name?.trim() || "the coach";
+    // resolveCoachConfig gives this coach's own calendar, title filter, and the
+    // set of addresses that identify them (loginEmail + workEmails).
+    const config = briefCoach ? resolveCoachConfig(briefCoach, settings) : null;
+    if (!config?.googleCalendarId || !hasCalendarCredentials()) {
       return NextResponse.json(
         { error: "Google Calendar not configured" },
         { status: 400 }
@@ -48,7 +71,7 @@ export async function GET(request: NextRequest) {
     // Fetch today's coaching events
     const calendar = getCalendar();
     const res = await calendar.events.list({
-      calendarId: settings.googleCalendarId,
+      calendarId: config.googleCalendarId,
       timeMin: todayStart.toISOString(),
       timeMax: todayEnd.toISOString(),
       singleEvents: true,
@@ -59,7 +82,7 @@ export async function GET(request: NextRequest) {
     const rawEvents = res.data.items || [];
     const coachingEvents = filterCoachingEvents(
       rawEvents,
-      settings.coachingTitleFilter
+      config.coachingTitleFilter
     );
 
     if (coachingEvents.length === 0) {
@@ -79,7 +102,7 @@ export async function GET(request: NextRequest) {
 
     // Match events to clients
     const clients = await prisma.client.findMany({
-      where: { status: { not: "CHURNED" }, ...clientWhere(coachId) },
+      where: { status: { not: "CHURNED" }, ...clientWhere(briefCoachId) },
       select: {
         id: true,
         name: true,
@@ -97,7 +120,7 @@ export async function GET(request: NextRequest) {
         emailToClient.set(se.toLowerCase(), c);
     }
 
-    const coachEmail = settings.coachEmail?.toLowerCase() || "";
+    const coachEmails = new Set(config.coachEmails);
 
     interface SessionContext {
       time: string;
@@ -118,7 +141,7 @@ export async function GET(request: NextRequest) {
       const attendees =
         event.attendees
           ?.filter(
-            (a) => a.email && a.email.toLowerCase() !== coachEmail && !a.resource
+            (a) => a.email && !coachEmails.has(a.email.toLowerCase()) && !a.resource
           )
           .map((a) => a.email!.toLowerCase()) ?? [];
 
@@ -144,7 +167,7 @@ export async function GET(request: NextRequest) {
 
       if (matchedClient) {
         const lastSession = await prisma.session.findFirst({
-          where: { clientId: matchedClient.id, ...viaClientWhere(coachId) },
+          where: { clientId: matchedClient.id, ...viaClientWhere(briefCoachId) },
           orderBy: { date: "desc" },
           select: { synopsis: true, actionItems: true },
         });
@@ -254,7 +277,7 @@ export async function GET(request: NextRequest) {
         summary: {
           type: "string",
           description:
-            "1-2 sentences on the day's tone — total billable hours, notable patterns, anything Todd should mentally prepare for.",
+            "1-2 sentences on the day's tone — total billable hours, notable patterns, anything the coach should mentally prepare for.",
         },
       },
       required: ["schedule", "scheduleNote", "perClient", "summary"],
@@ -289,7 +312,7 @@ export async function GET(request: NextRequest) {
         messages: [
           {
             role: "system",
-            content: `You generate a start-of-day briefing for executive coach Todd Zimbelman. Call the render_day_brief tool exactly once with the complete brief. Write in second person, use clients' first names, be specific and actionable. Total content under 350 words.
+            content: `You generate a start-of-day briefing for executive coach ${coachName}. Call the render_day_brief tool exactly once with the complete brief. Write in second person, use clients' first names, be specific and actionable. Total content under 350 words.
 
 For each session, mirror it once in "schedule" (one-line: who/duration/title-style label) and once in "perClient":
   - context: 2-3 sentences of what to remember and what to follow up on, drawn from lastSynopsis and openActionItems. Reference specifics, not generalities.
@@ -302,7 +325,7 @@ CRITICAL — session history rules:
 
 scheduleNote: a single short callout about back-to-back blocks, awkward gaps, or unusual density. Null if nothing notable.
 
-summary: 1-2 sentences on the day's tone — total billable hours, notable patterns, anything Todd should mentally prepare for.`,
+summary: 1-2 sentences on the day's tone — total billable hours, notable patterns, anything ${coachName} should mentally prepare for.`,
           },
           {
             role: "user",
@@ -375,7 +398,7 @@ summary: 1-2 sentences on the day's tone — total billable hours, notable patte
       }),
     };
 
-    // Surface unmatched-attendee warnings so Todd knows to add the email to
+    // Surface unmatched-attendee warnings so the coach knows to add the email to
     // the client's secondaryEmails. These show up in Vercel function logs.
     const unmatched = sessionContexts.filter((s) => s.status === "unknown");
     if (unmatched.length) {
