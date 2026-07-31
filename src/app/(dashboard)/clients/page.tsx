@@ -2,31 +2,54 @@ import { prisma } from "@/lib/db";
 import Link from "next/link";
 import { requireCoachPage } from "@/lib/authz-page";
 import { scopeCoachId, clientWhere } from "@/lib/authz";
+import { coachesForFilter } from "@/lib/coaches";
+import { CoachFilter } from "@/components/coach-filter";
 import { AddClientButton } from "./add-client";
 
 export const dynamic = "force-dynamic";
 
-export default async function ClientsPage() {
+export default async function ClientsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ coach?: string }>;
+}) {
   const coach = await requireCoachPage();
-  const coachId = scopeCoachId(coach);
+  const params = await searchParams;
+  const coachId = scopeCoachId(coach, params.coach ?? null);
 
-  const clients = await prisma.client.findMany({
-    where: clientWhere(coachId),
-    orderBy: { name: "asc" },
-    include: {
-      sessions: {
-        take: 1,
-        orderBy: { date: "desc" },
-        select: { date: true },
+  const [clients, coaches] = await Promise.all([
+    prisma.client.findMany({
+      where: clientWhere(coachId),
+      orderBy: { name: "asc" },
+      include: {
+        sessions: {
+          take: 1,
+          orderBy: { date: "desc" },
+          select: { date: true },
+        },
+        coach: { select: { id: true, name: true } },
       },
-    },
-  });
+    }),
+    coachesForFilter(coach),
+  ]);
+
+  // Two distinct gates. The Coach COLUMN is about attribution: any admin whose
+  // result set can span coaches needs it — including when the only *other*
+  // coach is INACTIVE (excluded from the roster) but still has historical rows
+  // mixed in. So it keys off role, not roster size. The FILTER is a selector:
+  // pointless with one selectable coach, so it keys off the active roster.
+  const isAdmin = coach.role !== "COACH";
+  const showCoachControls = isAdmin && coaches.length > 1;
+  // Adding a client while filtered to one coach lands it in THAT coach's book;
+  // "All coaches" has no unambiguous target, so fall back to a required picker
+  // in the modal (never the admin's own empty book).
+  const addToCoachId = params.coach ?? null;
 
   const activeCount = clients.filter((c) => c.status === "ACTIVE").length;
 
   return (
     <div>
-      <div className="flex items-baseline justify-between mb-8">
+      <div className="flex items-baseline justify-between mb-8 gap-4 flex-wrap">
         <div>
           <h1 className="font-display text-[32px] text-foreground">Clients</h1>
           <p className="text-sm text-muted mt-1">
@@ -35,11 +58,23 @@ export default async function ClientsPage() {
         </div>
         <AddClientButton
           defaultRate={coach.defaultHourlyRate ? Number(coach.defaultHourlyRate) : null}
+          coaches={showCoachControls ? coaches : []}
+          selectedCoachId={addToCoachId}
         />
       </div>
 
+      {showCoachControls && (
+        <div className="mb-4">
+          <CoachFilter coaches={coaches} selected={params.coach ?? null} basePath="/clients" />
+        </div>
+      )}
+
       {clients.length === 0 ? (
-        <EmptyState defaultRate={coach.defaultHourlyRate ? Number(coach.defaultHourlyRate) : null} />
+        <EmptyState
+          defaultRate={coach.defaultHourlyRate ? Number(coach.defaultHourlyRate) : null}
+          coaches={showCoachControls ? coaches : []}
+          selectedCoachId={addToCoachId}
+        />
       ) : (
         <div className="bg-surface border border-border rounded-[var(--radius-lg)] overflow-hidden">
           <table className="w-full">
@@ -48,6 +83,11 @@ export default async function ClientsPage() {
                 <th className="text-left px-5 py-3 text-xs text-muted uppercase tracking-wide font-medium">
                   Name
                 </th>
+                {isAdmin && (
+                  <th className="text-left px-5 py-3 text-xs text-muted uppercase tracking-wide font-medium hidden md:table-cell">
+                    Coach
+                  </th>
+                )}
                 <th className="text-left px-5 py-3 text-xs text-muted uppercase tracking-wide font-medium hidden md:table-cell">
                   Company
                 </th>
@@ -79,9 +119,15 @@ export default async function ClientsPage() {
                       {client.name}
                     </Link>
                     <p className="text-xs text-muted mt-0.5 md:hidden">
+                      {isAdmin ? `${client.coach?.name ?? "—"} · ` : ""}
                       {client.company || "—"}
                     </p>
                   </td>
+                  {isAdmin && (
+                    <td className="px-5 py-4 text-sm text-muted hidden md:table-cell">
+                      {client.coach?.name ?? "—"}
+                    </td>
+                  )}
                   <td className="px-5 py-4 text-sm text-muted hidden md:table-cell">
                     {client.company || "—"}
                   </td>
@@ -161,7 +207,15 @@ function StatusBadge({ status }: { status: string }) {
  * review and has never created a client. An empty state that describes a
  * feature the product does not have is worse than no empty state.
  */
-function EmptyState({ defaultRate }: { defaultRate: number | null }) {
+function EmptyState({
+  defaultRate,
+  coaches,
+  selectedCoachId,
+}: {
+  defaultRate: number | null;
+  coaches: Array<{ id: string; name: string }>;
+  selectedCoachId: string | null;
+}) {
   return (
     <div className="text-center py-16">
       <h2 className="font-display text-xl text-foreground">No clients yet</h2>
@@ -170,7 +224,13 @@ function EmptyState({ defaultRate }: { defaultRate: number | null }) {
         a Fathom recording finds its way to the right person — without it, sessions land in
         review instead of on a client.
       </p>
-      <AddClientButton defaultRate={defaultRate} />
+      {/* Same coach routing as the header button — otherwise adding from an
+          empty, coach-filtered view would silently land in the admin's book. */}
+      <AddClientButton
+        defaultRate={defaultRate}
+        coaches={coaches}
+        selectedCoachId={selectedCoachId}
+      />
     </div>
   );
 }

@@ -3,12 +3,21 @@ import Link from "next/link";
 import { CoachingCalendar } from "@/components/coaching-calendar";
 import { requireCoachPage } from "@/lib/authz-page";
 import { scopeCoachId, clientWhere, viaClientWhere } from "@/lib/authz";
+import { coachesForFilter } from "@/lib/coaches";
+import { CoachFilter } from "@/components/coach-filter";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ coach?: string }>;
+}) {
   const coach = await requireCoachPage();
-  const coachId = scopeCoachId(coach);
+  const params = await searchParams;
+  const coachId = scopeCoachId(coach, params.coach ?? null);
+  const coaches = await coachesForFilter(coach);
+  const showCoachControls = coach.role !== "COACH" && coaches.length > 1;
   const now = new Date();
   const greeting =
     now.getHours() < 12
@@ -84,6 +93,12 @@ export default async function DashboardPage() {
       </h1>
       <p className="font-mono text-sm text-muted mt-1">{dateStr}</p>
 
+      {showCoachControls && (
+        <div className="mt-5">
+          <CoachFilter coaches={coaches} selected={params.coach ?? null} basePath="/" />
+        </div>
+      )}
+
       {/* Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-8">
         <StatCard label="Active Clients" value={String(activeClients)} />
@@ -99,8 +114,11 @@ export default async function DashboardPage() {
         />
       </div>
 
-      {/* Coaching Schedule */}
-      {calendarConfigured && <CoachingCalendar />}
+      {/* Coaching Schedule — the calendar + morning brief read the viewer's own
+          calendar (singleton config), so they can't yet be scoped to another
+          coach. Hide them when filtered so they never contradict the KPI cards
+          above; they return in the unfiltered "All coaches" view. */}
+      {calendarConfigured && !params.coach && <CoachingCalendar />}
 
       {/* Recent Sessions */}
       <div className="mt-10 border-t border-border pt-6">

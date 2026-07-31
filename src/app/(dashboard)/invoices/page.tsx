@@ -3,12 +3,24 @@ import { GenerateInvoicesButton, InvoiceCard } from "./actions";
 import { detectDrift } from "@/lib/billing/snapshot";
 import { requireCoachPage } from "@/lib/authz-page";
 import { scopeCoachId, viaClientWhere, invoiceWhere } from "@/lib/authz";
+import { coachesForFilter } from "@/lib/coaches";
+import { CoachFilter } from "@/components/coach-filter";
 
 export const dynamic = "force-dynamic";
 
-export default async function InvoicesPage() {
+export default async function InvoicesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ coach?: string }>;
+}) {
   const coach = await requireCoachPage();
-  const coachId = scopeCoachId(coach);
+  const params = await searchParams;
+  const coachId = scopeCoachId(coach, params.coach ?? null);
+  const coaches = await coachesForFilter(coach);
+  // Column keys off role (attribution survives an inactive coach's history);
+  // filter keys off the active roster (no point with one selectable coach).
+  const isAdmin = coach.role !== "COACH";
+  const showCoachControls = isAdmin && coaches.length > 1;
 
   // Get unbilled summary
   const unbilledEntries = await prisma.timeEntry.findMany({
@@ -26,7 +38,10 @@ export default async function InvoicesPage() {
   // DRAFTs so the Send button remains reachable until the invoice is sent.
   const draftInvoices = await prisma.invoice.findMany({
     where: { status: { in: ["DRAFT", "APPROVED"] }, ...invoiceWhere(coachId) },
-    include: { client: true, group: { include: { members: true } } },
+    include: {
+      client: { include: { coach: { select: { name: true } } } },
+      group: { include: { members: true, coach: { select: { name: true } } } },
+    },
     orderBy: { createdAt: "desc" },
   });
 
@@ -34,8 +49,8 @@ export default async function InvoicesPage() {
   const invoiceHistory = await prisma.invoice.findMany({
     where: { status: { in: ["SENT", "PAID", "OVERDUE"] }, ...invoiceWhere(coachId) },
     include: {
-      client: { select: { name: true, id: true } },
-      group: { select: { name: true, id: true } },
+      client: { select: { name: true, id: true, coach: { select: { name: true } } } },
+      group: { select: { name: true, id: true, coach: { select: { name: true } } } },
     },
     orderBy: { createdAt: "desc" },
     take: 20,
@@ -43,7 +58,7 @@ export default async function InvoicesPage() {
 
   return (
     <div>
-      <div className="flex items-baseline justify-between mb-8">
+      <div className="flex items-baseline justify-between mb-8 gap-4 flex-wrap">
         <div>
           <h1 className="font-display text-[32px] text-foreground">Invoices</h1>
           <p className="text-sm text-muted mt-1">
@@ -51,6 +66,12 @@ export default async function InvoicesPage() {
           </p>
         </div>
       </div>
+
+      {showCoachControls && (
+        <div className="mb-6">
+          <CoachFilter coaches={coaches} selected={params.coach ?? null} basePath="/invoices" />
+        </div>
+      )}
 
       {/* Unbilled Alert */}
       {unbilledTotal > 0 && (
@@ -67,7 +88,18 @@ export default async function InvoicesPage() {
               {unbilledEntries.length} sessions ready to invoice
             </p>
           </div>
-          <GenerateInvoicesButton />
+          {/* Generation is practice-wide (see /api/invoices/generate), so it
+              would contradict a coach-filtered view. Offer it only under
+              "All coaches"; when filtered, show the scoped total without the
+              button and point back to the practice-wide view. */}
+          {params.coach ? (
+            <p className="text-xs text-muted max-w-[13rem] text-right leading-relaxed">
+              Generating drafts runs across all coaches — switch to{" "}
+              <span className="text-foreground">All coaches</span> to generate.
+            </p>
+          ) : (
+            <GenerateInvoicesButton />
+          )}
         </div>
       )}
 
@@ -89,9 +121,13 @@ export default async function InvoicesPage() {
                 ? invoice.group.name
                 : invoice.client?.name ?? "Unknown";
               const billableId = invoice.group?.id ?? invoice.client?.id ?? "";
+              // Attribution on the actionable card: without it an admin can't
+              // tell two coaches' same-named clients apart before approving/sending.
+              const coachName = invoice.group?.coach?.name ?? invoice.client?.coach?.name ?? null;
               return (
                 <InvoiceCard
                   key={invoice.id}
+                  coachName={isAdmin ? coachName : null}
                   invoice={{
                     id: invoice.id,
                     invoiceNumber: invoice.invoiceNumber,
@@ -153,6 +189,11 @@ export default async function InvoicesPage() {
                   <th className="text-left px-5 py-3 text-xs text-muted uppercase tracking-wide font-medium">
                     Client
                   </th>
+                  {isAdmin && (
+                    <th className="text-left px-5 py-3 text-xs text-muted uppercase tracking-wide font-medium hidden md:table-cell">
+                      Coach
+                    </th>
+                  )}
                   <th className="text-left px-5 py-3 text-xs text-muted uppercase tracking-wide font-medium">
                     Status
                   </th>
@@ -173,6 +214,11 @@ export default async function InvoicesPage() {
                     <td className="px-5 py-3 text-sm text-foreground">
                       {inv.group?.name ?? inv.client?.name ?? "—"}
                     </td>
+                    {isAdmin && (
+                      <td className="px-5 py-3 text-sm text-muted hidden md:table-cell">
+                        {inv.group?.coach?.name ?? inv.client?.coach?.name ?? "—"}
+                      </td>
+                    )}
                     <td className="px-5 py-3">
                       <InvoiceStatusBadge status={inv.status} />
                     </td>

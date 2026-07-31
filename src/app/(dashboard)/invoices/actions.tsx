@@ -45,6 +45,7 @@ export function InvoiceCard({
   invoice,
   clientName,
   clientId,
+  coachName = null,
   snapshot,
 }: {
   invoice: {
@@ -60,6 +61,8 @@ export function InvoiceCard({
   };
   clientName: string;
   clientId: string;
+  /** Whose book this invoice belongs to — shown only in a multi-coach admin view. */
+  coachName?: string | null;
   snapshot?: {
     snapshotClientName: string | null;
     snapshotBillingEmail: string | null;
@@ -211,6 +214,11 @@ export function InvoiceCard({
           >
             {clientName}
           </a>
+          {coachName && (
+            <p className="text-xs text-muted mt-0.5">
+              Coach: <span className="text-foreground">{coachName}</span>
+            </p>
+          )}
           <p className="font-mono text-xs text-muted mt-1">
             {invoice.invoiceNumber} ·{" "}
             {new Date(invoice.periodStart).toLocaleDateString("en-US", {
