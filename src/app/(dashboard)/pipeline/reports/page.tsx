@@ -5,7 +5,7 @@ import { scopeCoachId, prospectWhere } from "@/lib/authz";
 import { liveStages } from "@/lib/pipeline/stages";
 import { buildPipelineSummary, formatDays, type ProspectRow } from "@/lib/pipeline/report-math";
 import { activityDetailFor } from "@/lib/pipeline/next-activity";
-import { CoachFilter } from "../coach-filter";
+import { CoachFilter } from "@/components/coach-filter";
 
 export const dynamic = "force-dynamic";
 

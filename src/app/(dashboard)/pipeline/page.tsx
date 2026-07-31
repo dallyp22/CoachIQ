@@ -6,7 +6,8 @@ import { STALEST_FIRST } from "@/lib/pipeline/next-activity";
 import { liveStages } from "@/lib/pipeline/stages";
 import { AddProspectButton } from "./add-prospect";
 import { NextActivityCell, DaysInStage } from "./cells";
-import { CoachFilter } from "./coach-filter";
+import { CoachFilter } from "@/components/coach-filter";
+import { coachesForFilter } from "@/lib/coaches";
 
 export const dynamic = "force-dynamic";
 
@@ -71,14 +72,7 @@ export default async function PipelinePage({
   // Last activity for the whole page in one query — never one per row.
   const lastByProspect = await lastActivityMap(prospects.map((p) => p.id));
 
-  const coaches =
-    coach.role === "COACH"
-      ? [{ id: coach.id, name: coach.name }]
-      : await prisma.coach.findMany({
-          where: { status: { not: "INACTIVE" } },
-          orderBy: { name: "asc" },
-          select: { id: true, name: true },
-        });
+  const coaches = await coachesForFilter(coach);
 
   const unscheduled = prospects.filter((p) => !p.nextActivityAt && !p.stage.terminal).length;
 

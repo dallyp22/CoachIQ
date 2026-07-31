@@ -160,10 +160,18 @@ export function authzResponse(err: unknown): NextResponse {
  * A COACH is pinned to their own id — the `requested` parameter is ignored
  * for them, so no amount of query-string fiddling widens their view.
  * OWNER/ADMIN see everything by default and may narrow to one coach.
+ *
+ * `requested` is only honored when it is a well-formed UUID. It flows straight
+ * into a native `@db.Uuid` predicate, so a malformed `?coach=` value (a
+ * hand-edited or stale link) would otherwise make Postgres reject the cast and
+ * 500 the whole page. Anything that isn't a UUID falls back to the whole
+ * practice — the CoachFilter only ever emits real ids, so this only bites
+ * tampered URLs, and an empty result for a valid-but-nonexistent id is fine.
  */
+const COACH_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function scopeCoachId(coach: ResolvedCoach, requested?: string | null): string | null {
   if (coach.role === "COACH") return coach.id;
-  return requested && requested.length > 0 ? requested : null;
+  return requested && COACH_ID_RE.test(requested) ? requested : null;
 }
 
 /**

@@ -45,9 +45,9 @@ vi.mock("@/lib/ai", () => ({
 
 import { GET } from "@/app/api/daily-brief/route";
 
-const OWNER = { id: "coach-a", role: "OWNER" as const };
+const OWNER = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", role: "OWNER" as const };
 const briefCoachA = {
-  id: "coach-a",
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   loginEmail: "coach@cocreate.com",
   workEmails: [],
   googleCalendarId: "cal-a",
@@ -79,16 +79,16 @@ describe("GET /api/daily-brief — per-coach calendar", () => {
   it("fetches the viewed coach's OWN calendar id", async () => {
     await GET(req());
     expect(mocks.coachFindUnique).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "coach-a" } })
+      expect.objectContaining({ where: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } })
     );
     expect(mocks.eventsList.mock.calls[0][0].calendarId).toBe("cal-a");
   });
 
   it("resolves another coach's calendar when an owner passes ?coachId", async () => {
-    mocks.coachFindUnique.mockResolvedValue({ ...briefCoachA, id: "coach-b", googleCalendarId: "cal-b" });
-    await GET(req("coach-b"));
+    mocks.coachFindUnique.mockResolvedValue({ ...briefCoachA, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", googleCalendarId: "cal-b" });
+    await GET(req("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"));
     expect(mocks.coachFindUnique).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "coach-b" } })
+      expect.objectContaining({ where: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" } })
     );
     expect(mocks.eventsList.mock.calls[0][0].calendarId).toBe("cal-b");
   });
