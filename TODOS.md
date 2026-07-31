@@ -307,6 +307,29 @@ The repo has no E2E framework and zero `.tsx` has ever been tested. The pure log
 **Fix path:** Add per-coach calendar/title-filter editing in the Coaches section; once it exists, drop the calendar fields from the practice Settings form and the founder-mirror.
 **Added:** 2026-07-22 via /ship adversarial review (Phase 5).
 
+## Admin Coach-Views Follow-ups (from the 2026-07-31 ship, v0.4.0.0)
+
+### Full per-coach dashboard calendar + morning brief
+**Priority:** P2
+**What:** The dashboard coach filter scopes the KPI cards and recent-sessions feed, but the Coaching Calendar widget and Morning Brief read the viewer's own calendar (singleton `CoachSettings` config), so they can't be scoped to a selected coach. v0.4.0.0 hides them when a coach is filtered rather than showing the wrong calendar.
+**Why:** An admin filtered to Kurt should see Kurt's schedule, not nothing. Tangled with the pre-existing singleton calendar config ("Finding A" / the Phase 5 per-coach settings UI).
+**Fix path:** Thread the selected coachId through `CoachingCalendar` → `/api/calendar/events` + `/api/daily-brief`, and resolve calendar config from the selected Coach row (not the singleton) before `resolveCoachConfig`. Do this with the per-coach calendar-editing UI already filed under Multi-Coach Cron Follow-ups.
+**Added:** 2026-07-31 via /ship review (admin coach-views).
+
+### Coach-scope invoice generation
+**Priority:** P2
+**What:** "Generate Draft Invoices" runs practice-wide (`generateForAllDueClients`, no coach predicate). v0.4.0.0 makes this honest by only showing the button in the All-coaches view, but an admin still can't generate drafts for just one coach.
+**Why:** At scale an admin may want to bill one coach's book without sweeping everyone. Purely a scoping gap — the button is ADMIN-only and idempotent, so no data risk today.
+**Fix path:** Give `generateForAllDueClients` an optional coach filter and pass the selected coach from the button; then the button can live in the coach-filtered view too.
+**Added:** 2026-07-31 via /ship review (admin coach-views).
+
+### Meetings in the mobile bottom nav
+**Priority:** P3
+**What:** The new `/meetings` page is in the desktop sidebar but not the mobile bottom tab bar (already at 7 tabs). Mobile users can't reach it.
+**Why:** Minor — the admin views are desktop-oriented — but it's a dead end on mobile.
+**Fix path:** Add Meetings to `mobile-nav.tsx`, likely behind an overflow/more affordance since the bar is full.
+**Added:** 2026-07-31 via /ship review (admin coach-views).
+
 ## Completed
 
 ### Encrypt CoachSettings secret keys

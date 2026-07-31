@@ -3,6 +3,31 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.4.0.0] - 2026-07-31
+
+Admin coach-views. The data layer already let an owner or admin see every coach's book, but the UI had no coach dimension — a second coach's clients, sessions, and invoices were served into one merged list with no way to tell whose they were or to isolate them. This propagates the Pipeline module's proven coach filter to the rest of the app and adds a practice-wide Meetings view, so an admin can finally answer "what does Kurt's book look like?"
+
+### Added
+- **Coach filter + Coach column on Clients, Invoices, and the new Meetings page.** OWNER/ADMIN get an "All coaches / Todd / Kurt" selector (the same control the Pipeline already used, now shared) plus a Coach column so every row shows whose it is. A COACH sees neither — they only ever have their own book.
+- **Meetings page.** A new practice-wide session feed across all coaches, filterable by coach, showing date, client, coach, source, and duration. Sessions previously lived only per-client and on the dashboard.
+- **Dashboard KPIs filter by coach.** The stat cards and recent-sessions feed scope to All coaches or one coach.
+- **Add Client routes to the right book.** Adding a client as an admin now asks which coach it belongs to (pre-selected when a coach is filtered), instead of silently landing it in the admin's own empty book.
+
+### Changed
+- **Invoice generation stays practice-wide but is honest about it.** The "Generate Draft Invoices" button now appears only in the All-coaches view; when filtered to one coach, the scoped unbilled total shows without the button, so a coach-filtered view can never trigger a practice-wide side effect.
+- **The dashboard calendar/morning brief hide when a coach is selected.** They read the viewer's own calendar (singleton config) and can't yet be scoped to another coach, so they're hidden while filtered rather than contradicting the KPI cards above.
+
+### Fixed
+Found by the pre-merge review, before any of it shipped:
+- A malformed `?coach=` URL param (hand-edited or stale) no longer 500s the page — a non-UUID value falls back to the whole-practice view instead of reaching a native uuid predicate. This guard covers every filtered surface at once.
+- Coach attribution on draft invoice cards, so an admin can't approve or send the wrong coach's same-named client.
+- The Coach column is driven by role, not the active roster, so an inactive coach's historical rows are still attributable.
+- The Add Client rate hint no longer shows the admin's own default when adding to another coach's book.
+
+### Notes
+- Tenant isolation is unchanged and re-verified: `scopeCoachId` still ignores `?coach=` for a COACH, and the client-create endpoint still refuses a COACH-supplied `coachId`.
+- Known follow-ups filed in TODOS.md: full per-coach dashboard calendar and coach-scoped invoice generation (both tangle with the pre-existing singleton calendar config), and Meetings in the mobile bottom nav.
+
 ## [0.3.2.0] - 2026-07-22
 
 Multi-coach calendar automation. The nightly crons — calendar sync, prep briefs, and the daily briefing — read a single practice-wide calendar, so a second coach's sessions were silently invisible to all of them. They now run per coach: each coach's own calendar is matched against only that coach's clients, so onboarding a second coach gives them working calendar sync, prep briefs, and a daily brief — not just Fathom recordings.

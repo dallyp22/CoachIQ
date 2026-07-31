@@ -193,8 +193,17 @@ describe("scopeCoachId", () => {
     expect(scopeCoachId(ownerRow, "")).toBeNull();
   });
 
-  it("lets OWNER/ADMIN narrow to one coach", () => {
-    expect(scopeCoachId(ownerRow, "coach-kurt")).toBe("coach-kurt");
+  it("lets OWNER/ADMIN narrow to one coach (well-formed UUID)", () => {
+    const validId = "11111111-1111-4111-8111-111111111111";
+    expect(scopeCoachId(ownerRow, validId)).toBe(validId);
+  });
+
+  it("ignores a malformed coach id and falls back to the whole practice", () => {
+    // The value flows into a native @db.Uuid predicate, so a hand-edited or
+    // stale ?coach= (not a UUID) must not reach Postgres and 500 the page.
+    expect(scopeCoachId(ownerRow, "not-a-uuid")).toBeNull();
+    expect(scopeCoachId(ownerRow, "coach-kurt")).toBeNull();
+    expect(scopeCoachId(ownerRow, "11111111-1111-4111-8111")).toBeNull();
   });
 });
 

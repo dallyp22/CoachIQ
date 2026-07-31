@@ -11,7 +11,19 @@ import { Modal, Field, inputClass } from "@/components/modal";
  * so the paste mode is the primary path during setup, not a power-user extra.
  */
 
-export function AddClientButton({ defaultRate }: { defaultRate: number | null }) {
+type CoachOption = { id: string; name: string };
+
+export function AddClientButton({
+  defaultRate,
+  coaches = [],
+  selectedCoachId = null,
+}: {
+  defaultRate: number | null;
+  /** Non-empty only for OWNER/ADMIN viewing more than one book. */
+  coaches?: CoachOption[];
+  /** The coach the list is filtered to, if any — pre-selects the picker. */
+  selectedCoachId?: string | null;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -21,7 +33,14 @@ export function AddClientButton({ defaultRate }: { defaultRate: number | null })
       >
         Add client
       </button>
-      {open && <AddClientModal defaultRate={defaultRate} onClose={() => setOpen(false)} />}
+      {open && (
+        <AddClientModal
+          defaultRate={defaultRate}
+          coaches={coaches}
+          selectedCoachId={selectedCoachId}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </>
   );
 }
@@ -30,9 +49,13 @@ type Failure = { email: string; error: string };
 
 function AddClientModal({
   defaultRate,
+  coaches,
+  selectedCoachId,
   onClose,
 }: {
   defaultRate: number | null;
+  coaches: CoachOption[];
+  selectedCoachId: string | null;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -40,6 +63,10 @@ function AddClientModal({
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<{ created: number; failed: Failure[] } | null>(null);
+  // Whose book the new clients land in. Only meaningful for admins (coaches
+  // non-empty); a COACH omits it and the server pins to them.
+  const needsCoachPick = coaches.length > 0;
+  const [coachId, setCoachId] = useState<string>(selectedCoachId ?? "");
 
   const [single, setSingle] = useState({
     name: "",
@@ -80,11 +107,15 @@ function AddClientModal({
         setErr("Nothing to add.");
         return;
       }
+      if (needsCoachPick && !coachId) {
+        setErr("Choose which coach these clients belong to.");
+        return;
+      }
 
       const resp = await fetch("/api/clients", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clients }),
+        body: JSON.stringify(needsCoachPick && coachId ? { clients, coachId } : { clients }),
       });
       const data = await resp.json();
 
@@ -162,6 +193,25 @@ function AddClientModal({
       </div>
 
       <form onSubmit={submit} className="space-y-3">
+        {needsCoachPick && (
+          <Field label="Coach *" hint="Whose book these clients belong to.">
+            <select
+              required
+              value={coachId}
+              onChange={(e) => setCoachId(e.target.value)}
+              className={inputClass}
+            >
+              <option value="" disabled>
+                Select a coach…
+              </option>
+              {coaches.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         {mode === "single" ? (
           <>
             <Field label="Name *">
@@ -190,7 +240,13 @@ function AddClientModal({
             </Field>
             <Field
               label="Hourly rate"
-              hint={defaultRate ? `Leave blank to use your default of $${defaultRate}.` : undefined}
+              hint={
+                needsCoachPick
+                  ? "Leave blank to use the selected coach's default rate."
+                  : defaultRate
+                    ? `Leave blank to use your default of $${defaultRate}.`
+                    : undefined
+              }
             >
               <input
                 inputMode="decimal"
