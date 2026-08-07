@@ -134,11 +134,23 @@ function eventTime(iso: string): string {
 
 // ─── Main Component ───────────────────────────────────────
 
-export function CoachingCalendar() {
+export function CoachingCalendar({
+  coachId = null,
+  coachName = null,
+  readOnly = false,
+}: {
+  /** When set, show THIS coach's schedule (admin view-as-coach) instead of the viewer's. */
+  coachId?: string | null;
+  /** Whose schedule this is, for the header when viewing another coach. */
+  coachName?: string | null;
+  /** Viewing someone else's calendar: hide brief-generation actions (they run in the viewer's context). */
+  readOnly?: boolean;
+} = {}) {
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [currentDate, setCurrentDate] = useState(getToday());
   const [days, setDays] = useState<DayData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
   const [generatingBrief, setGeneratingBrief] = useState<Set<string>>(new Set());
   const [morningBrief, setMorningBrief] = useState<DayBriefData | null>(null);
@@ -148,6 +160,7 @@ export function CoachingCalendar() {
 
   const fetchEvents = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       let timeMin: string;
       let timeMax: string;
@@ -165,10 +178,17 @@ export function CoachingCalendar() {
         timeMax = `${range.end}T23:59:59`;
       }
 
-      const res = await fetch(
-        `/api/calendar/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`
-      );
+      const params = new URLSearchParams({ timeMin, timeMax });
+      if (coachId) params.set("coachId", coachId);
+      const res = await fetch(`/api/calendar/events?${params.toString()}`);
       const data = await res.json();
+      if (!res.ok) {
+        // Surface config problems (e.g. a coach with no calendar connected)
+        // instead of rendering a misleading empty "no sessions" day.
+        setLoadError(typeof data?.error === "string" ? data.error : `Failed to load calendar (${res.status})`);
+        setDays([]);
+        return;
+      }
       const events: CalendarEvent[] = data.events || [];
 
       // Group by date
@@ -192,10 +212,11 @@ export function CoachingCalendar() {
       setDays(sortedDays);
     } catch {
       setDays([]);
+      setLoadError("Could not reach the calendar. Check your connection and try again.");
     } finally {
       setLoading(false);
     }
-  }, [viewMode, currentDate]);
+  }, [viewMode, currentDate, coachId]);
 
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
 
@@ -282,9 +303,11 @@ export function CoachingCalendar() {
     <div className="mt-10 border-t border-border pt-6">
       {/* Header */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <h2 className="font-display text-[22px] text-foreground">Coaching Schedule</h2>
+        <h2 className="font-display text-[22px] text-foreground">
+          {coachName ? `${coachName}'s Schedule` : "Coaching Schedule"}
+        </h2>
         <div className="flex items-center gap-2">
-          {viewMode === "day" && allEvents.length > 0 && (
+          {!readOnly && viewMode === "day" && allEvents.length > 0 && (
             <button onClick={handleMorningBrief} disabled={morningBriefLoading}
               className="px-3 py-1.5 bg-accent text-white text-xs font-medium rounded hover:bg-accent-hover transition-colors disabled:opacity-50">
               {morningBriefLoading ? "Generating..." : morningBrief ? (morningBriefExpanded ? "Hide Day Brief" : "Show Day Brief") : "Generate Day Brief"}
@@ -337,18 +360,29 @@ export function CoachingCalendar() {
         </div>
       )}
 
+      {/* Config / load error (e.g. selected coach has no calendar connected) */}
+      {!loading && loadError && (
+        <div className="mt-4 bg-surface border border-error/40 border-l-2 border-l-error rounded-r-md px-4 py-3">
+          <div className="text-[11px] uppercase tracking-wider text-error font-medium">
+            Schedule unavailable
+          </div>
+          <p className="mt-1 text-sm text-foreground/85 leading-relaxed">{loadError}</p>
+        </div>
+      )}
+
       {/* Content */}
       {loading ? (
         <div className="mt-4 space-y-3">
           {[1, 2, 3].map((i) => <div key={i} className="h-20 bg-border/30 rounded animate-pulse" />)}
         </div>
-      ) : viewMode === "day" ? (
+      ) : loadError ? null : viewMode === "day" ? (
         <DayView
           events={allEvents}
           expandedEvents={expandedEvents}
           generatingBrief={generatingBrief}
           onToggleExpand={toggleExpand}
           onGenerateBrief={generateBrief}
+          readOnly={readOnly}
         />
       ) : viewMode === "week" ? (
         <WeekView
@@ -372,13 +406,14 @@ export function CoachingCalendar() {
 // ─── Day View ─────────────────────────────────────────────
 
 function DayView({
-  events, expandedEvents, generatingBrief, onToggleExpand, onGenerateBrief,
+  events, expandedEvents, generatingBrief, onToggleExpand, onGenerateBrief, readOnly,
 }: {
   events: CalendarEvent[];
   expandedEvents: Set<string>;
   generatingBrief: Set<string>;
   onToggleExpand: (id: string) => void;
   onGenerateBrief: (clientId: string, eventId: string) => void;
+  readOnly: boolean;
 }) {
   if (events.length === 0) {
     return <p className="text-sm text-muted mt-4">No coaching sessions scheduled for this day.</p>;
@@ -456,7 +491,7 @@ function DayView({
                       {event.briefContent}
                     </div>
                   </div>
-                ) : event.client ? (
+                ) : !readOnly && event.client ? (
                   <button
                     onClick={(e) => { e.stopPropagation(); onGenerateBrief(event.client!.id, event.eventId || ""); }}
                     disabled={isGenerating || event.client.sessionCount === 0}

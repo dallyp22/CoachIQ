@@ -3,6 +3,23 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.5.0.0] - 2026-08-06
+
+Owner cockpit and view-as-coach. Kurt emailed that appointments were missing from his schedule. The cause: the calendar surfaced events by title keyword alone, so any real session titled plainly ("Kurt | Joel", "Melissa x Kurt") silently vanished. Fixing that opened the bigger gap — an owner could not see any coach's calendar or calendar health in the app at all, so a missing-appointment report meant running a script by hand. This release fixes the filter and gives Todd, as owner, a way to see each coach's schedule and setup status directly.
+
+### Added
+- **View-as-coach calendar.** An OWNER/ADMIN who selects a coach in the dashboard filter now sees that coach's live Google calendar, read-only (brief-generation actions hide). `/api/calendar/events` resolves the selected coach's calendar config instead of always the viewer's; the existing `scopeCoachId` boundary still blocks a COACH from viewing anyone else.
+- **Practice page (OWNER/ADMIN only).** Two owner views in one place: a per-coach **Overview** leaderboard (active clients, sessions this week, hours this month, unbilled $), and **Calendar Health** — per coach, is a calendar connected, is sync on, is it reachable by the service account (a live probe that catches the #1 cause of missing appointments: a calendar never shared with CoachIQ), last synced session, and the effective title filter. Coach names link straight to their view-as-coach schedule.
+- **Practice nav item** in the sidebar and mobile nav, shown only to OWNER/ADMIN.
+
+### Changed
+- **Coaching Schedule matches events by client, not just title.** An event now shows if its title matches the coaching filter OR a known client of that coach is on the invite. The billing sync still gates billable sessions on title alone, so a client-attended non-coaching meeting can appear on the schedule without ever minting an invoice.
+- **The dashboard calendar no longer hides when a coach is selected** (reversing 0.4.0.0). It now shows the selected coach's schedule read-only, since the events API can scope to any coach.
+- **A selected coach with no calendar connected shows a clear message** instead of a misleading empty "no sessions" day.
+
+### Fixed
+- **Appointments no longer silently disappear from the calendar** when their title lacks a coaching keyword. This was the reported bug: real client sessions titled plainly were dropped by a title-only regex filter.
+
 ## [0.4.0.0] - 2026-07-31
 
 Admin coach-views. The data layer already let an owner or admin see every coach's book, but the UI had no coach dimension — a second coach's clients, sessions, and invoices were served into one merged list with no way to tell whose they were or to isolate them. This propagates the Pipeline module's proven coach filter to the rest of the app and adds a practice-wide Meetings view, so an admin can finally answer "what does Kurt's book look like?"

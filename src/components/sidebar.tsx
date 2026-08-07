@@ -5,10 +5,13 @@ import { usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { ThemeToggle } from "./theme-toggle";
 
-const navItems = [
+type NavItem = { href: string; label: string; icon: (p: { className?: string }) => React.ReactElement; adminOnly?: boolean };
+
+const navItems: NavItem[] = [
   { href: "/", label: "Dashboard", icon: DashboardIcon },
   { href: "/clients", label: "Clients", icon: ClientsIcon },
   { href: "/meetings", label: "Meetings", icon: MeetingsIcon },
+  { href: "/practice", label: "Practice", icon: PracticeIcon, adminOnly: true },
   { href: "/pipeline", label: "Pipeline", icon: PipelineIcon },
   { href: "/search", label: "Search", icon: SearchIcon },
   { href: "/billing-groups", label: "Billing Groups", icon: GroupsIcon },
@@ -17,8 +20,9 @@ const navItems = [
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
-export function Sidebar() {
+export function Sidebar({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
+  const items = navItems.filter((i) => !i.adminOnly || isAdmin);
 
   return (
     <aside className="hidden lg:flex lg:flex-col lg:w-[280px] bg-sidebar text-sidebar-text h-full">
@@ -42,7 +46,7 @@ export function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 space-y-0.5">
-        {navItems.map((item) => {
+        {items.map((item) => {
           const isActive =
             item.href === "/"
               ? pathname === "/"
@@ -112,6 +116,14 @@ function PipelineIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h12M3.75 17.25h7.5" />
+    </svg>
+  );
+}
+
+function PracticeIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21m-3.75 3.75h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Zm0 3h.008v.008h-.008v-.008Z" />
     </svg>
   );
 }

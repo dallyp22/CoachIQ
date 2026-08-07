@@ -10,7 +10,7 @@ import {
 } from "@/lib/authz";
 import {
   getCalendar,
-  filterCoachingEvents,
+  filterScheduleEvents,
   eventDurationMinutes,
 } from "@/lib/google-calendar";
 
@@ -34,14 +34,38 @@ export async function GET(request: NextRequest) {
 
   try {
     const settings = await prisma.coachSettings.findFirst();
-    // Each coach reads THEIR calendar. Falling back to the practice setting
-    // would show Kurt Todd's schedule.
-    const config = resolveCoachConfig(coach, settings);
+
+    // Whose calendar do we read? A COACH is pinned to themselves by
+    // scopeCoachId. An OWNER/ADMIN who selected a coach reads THAT coach's
+    // calendar (view-as-coach), so Todd can pull up Kurt's schedule when Kurt
+    // says an appointment is missing. "All coaches" (coachId null) falls back
+    // to the viewer's own calendar. scopeCoachId already enforced the boundary,
+    // so coachId here is only ever one this viewer may see.
+    let calendarCoach: Parameters<typeof resolveCoachConfig>[0] = coach;
+    if (coachId && coachId !== coach.id) {
+      const target = await prisma.coach.findUnique({
+        where: { id: coachId },
+        select: {
+          coachingTitleFilter: true,
+          googleCalendarId: true,
+          calendarSyncEnabled: true,
+          defaultHourlyRate: true,
+          loginEmail: true,
+          workEmails: true,
+        },
+      });
+      if (!target) {
+        return NextResponse.json({ error: "Coach not found" }, { status: 404 });
+      }
+      calendarCoach = target;
+    }
+
+    const config = resolveCoachConfig(calendarCoach, settings);
     const calendarId = config.googleCalendarId;
 
     if (!calendarId) {
       return NextResponse.json(
-        { error: "Google Calendar ID not configured" },
+        { error: "This coach has no Google Calendar connected." },
         { status: 400 }
       );
     }
@@ -74,7 +98,6 @@ export async function GET(request: NextRequest) {
     });
 
     const rawEvents = res.data.items || [];
-    const coachingEvents = filterCoachingEvents(rawEvents, config.coachingTitleFilter);
 
     // Load clients
     const clients = await prisma.client.findMany({
@@ -102,6 +125,16 @@ export async function GET(request: NextRequest) {
     // Exclude every address this coach records or organizes under, not just
     // the practice's single coachEmail.
     const coachEmails = new Set(config.coachEmails);
+
+    // Show an event if its title matches the coaching filter OR a known client
+    // is on the invite. See filterScheduleEvents — display-only, wider than the
+    // strict title filter the billing sync uses.
+    const coachingEvents = filterScheduleEvents(
+      rawEvents,
+      config.coachingTitleFilter,
+      coachEmails,
+      new Set(emailToClient.keys())
+    );
 
     // Enrich events with full context
     const enrichedEvents = await Promise.all(

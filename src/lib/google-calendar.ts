@@ -166,6 +166,42 @@ export function filterCoachingEvents(
 }
 
 /**
+ * Which events belong on a coach's SCHEDULE (display), a deliberately wider net
+ * than {@link filterCoachingEvents} which gates billing.
+ *
+ * An event shows if its title matches the coaching filter OR a known client of
+ * this coach is on the invite. Title-only matching silently dropped real
+ * sessions a coach titled plainly ("Kurt | Joel", "Melissa x Kurt"), and a
+ * missing appointment reads as a broken calendar. Matching on the client
+ * attendee is the robust signal — the coach is meeting someone they coach.
+ *
+ * This is DISPLAY-only. The sync path (calendar-sync.ts) still uses the strict
+ * title filter to decide what becomes a billable Session, so a client-attended
+ * non-coaching meeting (e.g. a project call a client is also invited to) can
+ * appear on the schedule without ever minting an invoice.
+ */
+export function filterScheduleEvents(
+  events: calendar_v3.Schema$Event[],
+  filterPattern: string | null | undefined,
+  coachEmails: Set<string>,
+  clientEmails: Set<string>
+): calendar_v3.Schema$Event[] {
+  const regex = compileCoachingFilter(filterPattern);
+  return events.filter((event) => {
+    if (event.summary && regex.test(event.summary)) return true;
+    return (
+      event.attendees?.some(
+        (a) =>
+          a.email &&
+          !a.resource &&
+          !coachEmails.has(a.email.toLowerCase()) &&
+          clientEmails.has(a.email.toLowerCase())
+      ) ?? false
+    );
+  });
+}
+
+/**
  * Calculate duration in minutes from a calendar event.
  */
 export function eventDurationMinutes(
