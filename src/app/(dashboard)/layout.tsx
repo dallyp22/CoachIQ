@@ -16,12 +16,14 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  await requireCoachPage();
+  const coach = await requireCoachPage();
+  // OWNER/ADMIN get the practice-wide nav (Practice page). A COACH never sees it.
+  const isAdmin = coach.role !== "COACH";
 
   return (
     <div className="flex h-full flex-col lg:flex-row">
-      <MobileNav />
-      <Sidebar />
+      <MobileNav isAdmin={isAdmin} />
+      <Sidebar isAdmin={isAdmin} />
       <main className="flex-1 overflow-y-auto bg-background pb-20 lg:pb-0">
         <div className="max-w-[1200px] mx-auto px-4 py-6 lg:px-10 lg:py-8">
           {children}

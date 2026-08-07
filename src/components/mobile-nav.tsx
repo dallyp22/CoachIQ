@@ -3,9 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const tabs = [
+type Tab = { href: string; label: string; icon: (p: { className?: string }) => React.ReactElement; adminOnly?: boolean };
+
+const tabs: Tab[] = [
   { href: "/", label: "Home", icon: HomeIcon },
   { href: "/clients", label: "Clients", icon: ClientsIcon },
+  { href: "/practice", label: "Practice", icon: PracticeIcon, adminOnly: true },
   { href: "/pipeline", label: "Pipeline", icon: PipelineIcon },
   { href: "/search", label: "Search", icon: SearchIcon },
   { href: "/billing-groups", label: "Groups", icon: GroupsIcon },
@@ -13,8 +16,9 @@ const tabs = [
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
-export function MobileNav() {
+export function MobileNav({ isAdmin = false }: { isAdmin?: boolean }) {
   const pathname = usePathname();
+  const visibleTabs = tabs.filter((t) => !t.adminOnly || isAdmin);
 
   return (
     <>
@@ -27,7 +31,7 @@ export function MobileNav() {
 
       {/* Bottom tab bar */}
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-sidebar border-t border-sidebar-surface flex z-50">
-        {tabs.map((tab) => {
+        {visibleTabs.map((tab) => {
           const isActive =
             tab.href === "/"
               ? pathname === "/"
@@ -72,6 +76,14 @@ function PipelineIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h12M3.75 17.25h7.5" />
+    </svg>
+  );
+}
+
+function PracticeIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 21h19.5m-18-18v18m10.5-18v18m6-13.5V21M6.75 6.75h.75m-.75 3h.75m-.75 3h.75m3-6h.75m-.75 3h.75m-.75 3h.75M6.75 21v-3.375c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21M3 3h12m-.75 4.5H21" />
     </svg>
   );
 }
