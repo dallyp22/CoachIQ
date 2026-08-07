@@ -18,6 +18,13 @@ export default async function DashboardPage({
   const coachId = scopeCoachId(coach, params.coach ?? null);
   const coaches = await coachesForFilter(coach);
   const showCoachControls = coach.role !== "COACH" && coaches.length > 1;
+
+  // View-as-coach: when an admin filters to a coach other than themselves, the
+  // schedule below reads THAT coach's calendar read-only.
+  const viewingOtherCoach = !!coachId && coachId !== coach.id;
+  const selectedCoachName = viewingOtherCoach
+    ? coaches.find((c) => c.id === coachId)?.name ?? null
+    : null;
   const now = new Date();
   const greeting =
     now.getHours() < 12
@@ -114,11 +121,17 @@ export default async function DashboardPage({
         />
       </div>
 
-      {/* Coaching Schedule — the calendar + morning brief read the viewer's own
-          calendar (singleton config), so they can't yet be scoped to another
-          coach. Hide them when filtered so they never contradict the KPI cards
-          above; they return in the unfiltered "All coaches" view. */}
-      {calendarConfigured && !params.coach && <CoachingCalendar />}
+      {/* Coaching Schedule. Unfiltered (or filtered to yourself) it's your own
+          live calendar with brief actions. Filtered to another coach, an
+          OWNER/ADMIN sees that coach's schedule read-only (view-as-coach) — the
+          way Todd pulls up Kurt's day when Kurt says an appointment is missing. */}
+      {calendarConfigured && (
+        <CoachingCalendar
+          coachId={viewingOtherCoach ? coachId : null}
+          coachName={selectedCoachName}
+          readOnly={viewingOtherCoach}
+        />
+      )}
 
       {/* Recent Sessions */}
       <div className="mt-10 border-t border-border pt-6">
