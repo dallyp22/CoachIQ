@@ -1,6 +1,8 @@
 import { Sidebar } from "@/components/sidebar";
 import { MobileNav } from "@/components/mobile-nav";
 import { requireCoachPage } from "@/lib/authz-page";
+import { feedbackUnreadCount } from "@/lib/feedback-notify";
+import { FloatingReport } from "@/components/floating-report";
 
 /**
  * One gate for the whole dashboard.
@@ -19,16 +21,18 @@ export default async function DashboardLayout({
   const coach = await requireCoachPage();
   // OWNER/ADMIN get the practice-wide nav (Practice page). A COACH never sees it.
   const isAdmin = coach.role !== "COACH";
+  const feedbackUnread = await feedbackUnreadCount(coach);
 
   return (
     <div className="flex h-full flex-col lg:flex-row">
-      <MobileNav isAdmin={isAdmin} />
-      <Sidebar isAdmin={isAdmin} />
+      <MobileNav isAdmin={isAdmin} feedbackUnread={feedbackUnread} />
+      <Sidebar isAdmin={isAdmin} feedbackUnread={feedbackUnread} />
       <main className="flex-1 overflow-y-auto bg-background pb-20 lg:pb-0">
         <div className="max-w-[1200px] mx-auto px-4 py-6 lg:px-10 lg:py-8">
           {children}
         </div>
       </main>
+      <FloatingReport />
     </div>
   );
 }

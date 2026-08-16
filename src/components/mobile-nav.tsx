@@ -17,7 +17,7 @@ const tabs: Tab[] = [
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
-export function MobileNav({ isAdmin = false }: { isAdmin?: boolean }) {
+export function MobileNav({ isAdmin = false, feedbackUnread = 0 }: { isAdmin?: boolean; feedbackUnread?: number }) {
   const pathname = usePathname();
   const visibleTabs = tabs.filter((t) => !t.adminOnly || isAdmin);
 
@@ -47,7 +47,12 @@ export function MobileNav({ isAdmin = false }: { isAdmin?: boolean }) {
                   : "text-sidebar-muted"
               }`}
             >
-              <tab.icon className="w-5 h-5" />
+              <span className="relative">
+                <tab.icon className="w-5 h-5" />
+                {tab.href === "/feedback" && feedbackUnread > 0 && (
+                  <span className="absolute -right-1.5 -top-1 h-2 w-2 rounded-full bg-accent ring-2 ring-sidebar" />
+                )}
+              </span>
               {tab.label}
             </Link>
           );
