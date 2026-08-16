@@ -3,6 +3,23 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.6.0.0] - 2026-08-16
+
+Feedback Phase 2/3. Phase 1 gave each coach a private tracker; this turns it into a shared roadmap and closes the loop back to the reporter. Coaches upvote what they want next, file a report from anywhere in the app, get a nudge when their item moves, and see everything that shipped.
+
+### Added
+- **Upvotes.** A vote button on every list card and board card — "me too / I want this". One vote per coach per item (enforced at the database), optimistic and instant. The Board sorts each stage column by votes, so demand is visible at a glance.
+- **The Board is now the cross-coach roadmap.** Every coach sees every non-declined item by stage (a declined item stays visible only to whoever filed it). The List view stays each coach's own detailed tracker; an OWNER/ADMIN still sees everything in both.
+- **Floating Report button** on every page (hidden on /feedback, which has its own). File a bug the moment you hit it — the modal captures the page you're on.
+- **Unread badge.** The Feedback nav item shows a count (sidebar) / dot (mobile) when one of your reports has been acknowledged, moved, or replied to since you last looked. Opening /feedback clears it. For an owner it flags new reports and coach replies to triage.
+- **What's New tab.** Everything that reached Shipped, newest first, grouped by version — so a coach who asked for something sees it land. Visible to everyone.
+
+### Data
+- `feedback_votes` (one row per coach per item; composite PK bars a double vote), `feedback_items.voteCount` (denormalized, recomputed inside the vote transaction so it can't drift), `coaches.feedbackLastSeenAt` (drives the unread badge). Migration `20260816_feedback_phase2`, already applied to the database.
+
+### Chore
+- The loose internal planning docs (`CoachIQ_*.md`, `ReferralGraph_*.md`, `AGENT_HANDOFF.md`) are now gitignored — kept local, never committed or deployed — and `.vercelignore` is tracked so that exclusion applies on Vercel.
+
 ## [0.5.2.0] - 2026-08-16
 
 Feedback board + delete. Phase 1 shipped the per-item stage rail; this adds the pipeline-at-a-glance view and a way to remove items.
