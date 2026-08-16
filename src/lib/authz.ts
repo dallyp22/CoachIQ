@@ -32,6 +32,7 @@ export type ResolvedCoach = {
   calendarSyncEnabled: boolean;
   driveRootFolderId: string | null;
   defaultHourlyRate: unknown; // Prisma Decimal | null
+  feedbackLastSeenAt: Date | null;
 };
 
 const COACH_SELECT = {
@@ -46,6 +47,7 @@ const COACH_SELECT = {
   calendarSyncEnabled: true,
   driveRootFolderId: true,
   defaultHourlyRate: true,
+  feedbackLastSeenAt: true,
 } as const;
 
 /** OWNER outranks ADMIN outranks COACH. */
