@@ -3,6 +3,18 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.5.1.0] - 2026-08-16
+
+Feedback & Roadmap (Phase 1). A coach who hit a bug or wanted a feature had one channel: email Dallas, then hear nothing. Kurt's missing-appointments report is the case in point — it got fixed in 0.5.0.0, but he never saw it acknowledged or shipped. This adds an in-app page where any coach files a bug or feature request and then watches it move through the pipeline in the open — acknowledged, investigating, planned, in progress, shipped — with a reply from the CoachIQ team on the way. The point isn't ticket management for a five-person practice; it's follow-through the reporter can see.
+
+### Added
+- **`/feedback` page, for every coach.** A coach files a bug or feature request in a two-field modal (the page they were on, the app version, and their browser are captured automatically, so a plainly-worded report still arrives with the context to reproduce it) and sees each of their reports drawn on an animated **stage rail** — past stops filled, the live stop pulsing, future stops muted. A COACH sees only their own reports; OWNER/ADMIN sees every coach's.
+- **Owner triage, inline.** OWNER/ADMIN can move an item's stage (which writes a dated history row the timeline reads), leave a short note the reporter sees, set priority, decline with a required reason, and link a GitHub issue as an optional mirror. The database stays the source of truth.
+- **Team reply thread.** Any coach can reply on their own item; the owner replies as "CoachIQ Team" (a null-author comment) — the product speaking, not a named coach. This is the "sense of input" a status badge alone can't give.
+- **Honest declines, submitter-only.** A declined request carries a public reason the reporter reads. Because a coach only ever sees their own items, a "no" never becomes a public wall.
+- **Feedback nav item** in the sidebar and mobile nav, shown to everyone.
+- **Seed script** (`scripts/seed-feedback.ts`, idempotent) loading the four real inbox items so the board opens with a working pipeline.
+
 ## [0.5.0.0] - 2026-08-06
 
 Owner cockpit and view-as-coach. Kurt emailed that appointments were missing from his schedule. The cause: the calendar surfaced events by title keyword alone, so any real session titled plainly ("Kurt | Joel", "Melissa x Kurt") silently vanished. Fixing that opened the bigger gap — an owner could not see any coach's calendar or calendar health in the app at all, so a missing-appointment report meant running a script by hand. This release fixes the filter and gives Todd, as owner, a way to see each coach's schedule and setup status directly.
