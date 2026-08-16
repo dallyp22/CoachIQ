@@ -50,3 +50,9 @@ node_modules/
 /.clerk/
 .env.uat*
 .squad/
+
+# Internal planning docs — real names + strategy, kept local, never committed
+# or deployed (see .vercelignore). Not repo artifacts.
+AGENT_HANDOFF.md
+CoachIQ_*.md
+ReferralGraph_*.md
