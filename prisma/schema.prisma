@@ -202,6 +202,9 @@ model Coach {
   /// Dollars, matching every other money column. Applies as the pre-fill when
   /// a CLIENT is created; invoice rates freeze onto TimeEntry at session time.
   defaultHourlyRate   Decimal?    @db.Decimal(10, 2)
+  /// Last time this coach opened /feedback. Drives the unread badge — items
+  /// with activity newer than this that the coach did not cause are "unseen".
+  feedbackLastSeenAt  DateTime?
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
 
@@ -213,6 +216,7 @@ model Coach {
   pipelineActivities PipelineActivity[]
   feedbackItems      FeedbackItem[]
   feedbackComments   FeedbackComment[]
+  feedbackVotes      FeedbackVote[]
 
   @@index([status])
   @@map("coaches")
@@ -690,16 +694,38 @@ model FeedbackItem {
   declineReason    String?
   /// Optional owner-only mirror to a GitHub issue. The DB stays authoritative.
   githubUrl        String?
+  /// Denormalized upvote tally, kept in step with FeedbackVote inside the
+  /// vote transaction so the board can sort by demand without an aggregate
+  /// per render.
+  voteCount        Int               @default(0)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
   submittedBy Coach                 @relation(fields: [submittedById], references: [id])
   changes     FeedbackStageChange[]
   comments    FeedbackComment[]
+  votes       FeedbackVote[]
 
   @@index([stage, createdAt])
   @@index([submittedById, createdAt])
+  @@index([stage, voteCount])
   @@map("feedback_items")
+}
+
+/// One upvote per coach per item — "me too / I want this". The composite PK
+/// makes a double-vote impossible at the database, so the toggle route never
+/// races itself into two rows.
+model FeedbackVote {
+  feedbackId String   @db.Uuid
+  coachId    String   @db.Uuid
+  createdAt  DateTime @default(now())
+
+  feedback FeedbackItem @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  coach    Coach        @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  @@id([feedbackId, coachId])
+  @@index([coachId])
+  @@map("feedback_votes")
 }
 
 /// Stage history. A dedicated table (not folded into an audit log) because the

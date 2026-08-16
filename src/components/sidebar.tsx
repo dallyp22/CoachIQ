@@ -21,7 +21,7 @@ const navItems: NavItem[] = [
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
-export function Sidebar({ isAdmin = false }: { isAdmin?: boolean }) {
+export function Sidebar({ isAdmin = false, feedbackUnread = 0 }: { isAdmin?: boolean; feedbackUnread?: number }) {
   const pathname = usePathname();
   const items = navItems.filter((i) => !i.adminOnly || isAdmin);
 
@@ -64,6 +64,11 @@ export function Sidebar({ isAdmin = false }: { isAdmin?: boolean }) {
             >
               <item.icon className="w-4 h-4 shrink-0" />
               {item.label}
+              {item.href === "/feedback" && feedbackUnread > 0 && (
+                <span className="ml-auto min-w-[18px] rounded-full bg-accent px-1.5 text-center font-mono text-[10px] leading-[18px] text-white">
+                  {feedbackUnread > 9 ? "9+" : feedbackUnread}
+                </span>
+              )}
             </Link>
           );
         })}

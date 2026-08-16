@@ -1,12 +1,14 @@
 import Link from "next/link";
 import type { FeedbackStage, FeedbackType } from "@/generated/prisma/enums";
 import { ALL_STAGES, STAGE_LABELS, TYPE_LABELS } from "@/lib/feedback";
+import { VoteButton } from "./vote-button";
 
 /**
- * Every item grouped by stage — the pipeline read left-to-right. A read
- * surface: cards link into the List view (anchored to the item) where triage
- * and the thread live, so the board stays scannable. Columns scroll sideways
- * inside their own container; the page body never does.
+ * Every item grouped by stage — the pipeline read left-to-right, sorted by
+ * demand within each column. A read surface: cards link into the List view
+ * (anchored to the item) where triage and the thread live, so the board stays
+ * scannable. Columns scroll sideways inside their own container; the page body
+ * never does.
  */
 export type BoardItem = {
   id: string;
@@ -14,6 +16,8 @@ export type BoardItem = {
   title: string;
   priority: string | null;
   stage: FeedbackStage;
+  voteCount: number;
+  voted: boolean;
   submittedBy: { id: string; name: string };
 };
 
@@ -59,23 +63,28 @@ export function Board({ items, meId }: { items: BoardItem[]; meId: string }) {
                       href={`/feedback?view=list#${item.id}`}
                       className="block rounded-md border border-border bg-surface p-2.5 transition-colors hover:border-accent"
                     >
-                      <p className="text-[13px] font-medium leading-snug text-foreground">{item.title}</p>
-                      <div className="mt-2 flex items-center gap-2">
-                        <span
-                          className={`text-[10px] font-bold uppercase tracking-wide ${
-                            item.type === "BUG" ? "text-error" : "text-info"
-                          }`}
-                        >
-                          {TYPE_LABELS[item.type]}
-                        </span>
-                        {item.priority && (
-                          <span className="rounded-full border border-border px-1.5 text-[9px] uppercase tracking-wide text-muted">
-                            {item.priority.toLowerCase()}
-                          </span>
-                        )}
-                        <span className="ml-auto truncate font-mono text-[10px] text-muted/70">
-                          {item.submittedBy.id === meId ? "you" : item.submittedBy.name.split(/\s+/)[0]}
-                        </span>
+                      <div className="flex gap-2.5">
+                        <VoteButton id={item.id} voteCount={item.voteCount} voted={item.voted} size="sm" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[13px] font-medium leading-snug text-foreground">{item.title}</p>
+                          <div className="mt-2 flex items-center gap-2">
+                            <span
+                              className={`text-[10px] font-bold uppercase tracking-wide ${
+                                item.type === "BUG" ? "text-error" : "text-info"
+                              }`}
+                            >
+                              {TYPE_LABELS[item.type]}
+                            </span>
+                            {item.priority && (
+                              <span className="rounded-full border border-border px-1.5 text-[9px] uppercase tracking-wide text-muted">
+                                {item.priority.toLowerCase()}
+                              </span>
+                            )}
+                            <span className="ml-auto truncate font-mono text-[10px] text-muted/70">
+                              {item.submittedBy.id === meId ? "you" : item.submittedBy.name.split(/\s+/)[0]}
+                            </span>
+                          </div>
+                        </div>
                       </div>
                     </Link>
                   ))

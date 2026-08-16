@@ -1,0 +1,5 @@
+# Untracked planning docs — real names + internal strategy. Never ship to a deployment.
+.squad/
+AGENT_HANDOFF.md
+CoachIQ_*.md
+ReferralGraph_*.md
