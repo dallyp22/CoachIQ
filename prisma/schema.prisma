@@ -95,6 +95,34 @@ enum JobStatus {
   FAILED
 }
 
+// ─── FEEDBACK ─────────────────────────────────────────
+
+enum FeedbackType {
+  BUG
+  FEATURE
+}
+
+/// The pipeline a coach watches their report move through. Order is meaningful
+/// — the UI renders it as a rail and derives "how far along" from the index, so
+/// DECLINED sits OUTSIDE the linear order (a dead end, not a further step) and
+/// is handled explicitly rather than by position.
+enum FeedbackStage {
+  SUBMITTED
+  ACKNOWLEDGED
+  INVESTIGATING
+  PLANNED
+  IN_PROGRESS
+  SHIPPED
+  DECLINED
+}
+
+enum FeedbackPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
 // ─── PIPELINE ─────────────────────────────────────────
 
 /// A stage marked terminal closes the prospect. At most ONE non-archived stage
@@ -183,6 +211,8 @@ model Coach {
   ownedProspects     Prospect[]         @relation("ProspectOwner")
   assignedProspects  Prospect[]         @relation("ProspectAssignee")
   pipelineActivities PipelineActivity[]
+  feedbackItems      FeedbackItem[]
+  feedbackComments   FeedbackComment[]
 
   @@index([status])
   @@map("coaches")
@@ -625,6 +655,89 @@ model PrepBrief {
 
   @@index([clientId, targetSessionDate])
   @@map("prep_briefs")
+}
+
+// ─── FEEDBACK & ROADMAP ───────────────────────────────
+
+/// A bug report or feature request from a coach, shown moving through the
+/// pipeline in the open. The point of the whole module is follow-through the
+/// reporter can SEE — an email to the owner vanishes, this does not.
+///
+/// pageUrl/appVersion/userAgent are captured automatically at submit so the
+/// reporter never has to describe their environment; a plainly-worded report
+/// ("calendar's missing appointments") still lands with the context needed to
+/// reproduce it.
+model FeedbackItem {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type             FeedbackType
+  title            String
+  body             String
+  stage            FeedbackStage     @default(SUBMITTED)
+  /// Owner-set triage weight. Null until triaged.
+  priority         FeedbackPriority?
+  submittedById    String            @db.Uuid
+  /// Auto-captured context — never a required field on the form.
+  pageUrl          String?
+  appVersion       String?
+  userAgent        String?
+  /// Stamped when the item first leaves SUBMITTED, so "how fast did we
+  /// acknowledge" is a column read, not a scan of the change log.
+  ackAt            DateTime?
+  shippedAt        DateTime?
+  shippedInVersion String?
+  /// Required when stage is DECLINED — an honest "no" with a reason is the
+  /// transparency the module exists to provide.
+  declineReason    String?
+  /// Optional owner-only mirror to a GitHub issue. The DB stays authoritative.
+  githubUrl        String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  submittedBy Coach                 @relation(fields: [submittedById], references: [id])
+  changes     FeedbackStageChange[]
+  comments    FeedbackComment[]
+
+  @@index([stage, createdAt])
+  @@index([submittedById, createdAt])
+  @@map("feedback_items")
+}
+
+/// Stage history. A dedicated table (not folded into an audit log) because the
+/// timeline reads it as DATA — one row per transition, rendered with timestamps
+/// — exactly like ProspectStageChange serves the funnel reports.
+model FeedbackStageChange {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  feedbackId  String         @db.Uuid
+  /// null = created into this stage.
+  fromStage   FeedbackStage?
+  toStage     FeedbackStage
+  /// A short public note the owner leaves with the move ("reproduced it").
+  note        String?
+  /// Coach row; null renders as "CoachIQ Team" / system.
+  changedById String?        @db.Uuid
+  changedAt   DateTime       @default(now())
+
+  feedback FeedbackItem @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+
+  @@index([feedbackId, changedAt])
+  @@map("feedback_stage_changes")
+}
+
+/// The dialogue channel — the actual "sense of input." A null authorId renders
+/// as "CoachIQ Team", which is how the owner replies as the product rather than
+/// as a named coach.
+model FeedbackComment {
+  id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  feedbackId String       @db.Uuid
+  authorId   String?      @db.Uuid
+  body       String
+  createdAt  DateTime     @default(now())
+
+  feedback FeedbackItem @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+  author   Coach?       @relation(fields: [authorId], references: [id])
+
+  @@index([feedbackId, createdAt])
+  @@map("feedback_comments")
 }
 
 model CoachSettings {
