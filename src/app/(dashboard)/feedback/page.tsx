@@ -6,6 +6,9 @@ import { StageRail } from "./stage-rail";
 import { ReportButton } from "./report-button";
 import { TriageControls } from "./triage-controls";
 import { CommentForm } from "./comment-form";
+import { DeleteButton } from "./delete-button";
+import { ViewToggle } from "./view-toggle";
+import { Board } from "./board";
 
 export const dynamic = "force-dynamic";
 
@@ -20,9 +23,14 @@ export const dynamic = "force-dynamic";
  * items, and an admin sees all, so a declined item never becomes a public
  * "we said no to this" wall.
  */
-export default async function FeedbackPage() {
+export default async function FeedbackPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
   const coach = await requireCoachPage();
   const isAdmin = coach.role !== "COACH";
+  const view = (await searchParams).view === "board" ? "board" : "list";
 
   const items = await prisma.feedbackItem.findMany({
     where: isAdmin ? {} : { submittedById: coach.id },
@@ -76,8 +84,22 @@ export default async function FeedbackPage() {
         </p>
       )}
 
-      {ordered.length === 0 ? (
+      <ViewToggle view={view} />
+
+      {items.length === 0 ? (
         <EmptyState isAdmin={isAdmin} />
+      ) : view === "board" ? (
+        <Board
+          items={items.map((i) => ({
+            id: i.id,
+            type: i.type,
+            title: i.title,
+            priority: i.priority,
+            stage: i.stage,
+            submittedBy: i.submittedBy,
+          }))}
+          meId={coach.id}
+        />
       ) : (
         <div className="mt-6 space-y-4">
           {ordered.map((item) => {
@@ -165,6 +187,12 @@ export default async function FeedbackPage() {
                     priority={item.priority}
                     githubUrl={item.githubUrl}
                   />
+                )}
+
+                {canComment && (
+                  <div className="mt-4 flex justify-end">
+                    <DeleteButton id={item.id} />
+                  </div>
                 )}
               </article>
             );

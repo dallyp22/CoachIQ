@@ -118,3 +118,34 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
 
   return NextResponse.json({ ok: true });
 }
+
+/**
+ * DELETE /api/feedback/[id] — remove a report for good.
+ *
+ * ADMIN+ may delete any item; a COACH may delete only their own (withdrawing a
+ * report they filed). A refusal answers 404, not 403 — confirming an item
+ * exists but belongs to someone else is itself a disclosure, matching the
+ * prospect route. Stage history and comments cascade (FK ON DELETE CASCADE).
+ */
+export async function DELETE(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  let actor;
+  try {
+    actor = await requireCoach();
+  } catch (err) {
+    return authzResponse(err);
+  }
+
+  const { id } = await ctx.params;
+  const item = await prisma.feedbackItem.findUnique({
+    where: { id },
+    select: { id: true, submittedById: true },
+  });
+
+  const isAdmin = actor.role !== "COACH";
+  if (!item || (!isAdmin && item.submittedById !== actor.id)) {
+    return NextResponse.json({ error: "Feedback item not found" }, { status: 404 });
+  }
+
+  await prisma.feedbackItem.delete({ where: { id } });
+  return NextResponse.json({ ok: true });
+}
