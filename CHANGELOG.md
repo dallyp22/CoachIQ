@@ -3,6 +3,14 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.5.2.0] - 2026-08-16
+
+Feedback board + delete. Phase 1 shipped the per-item stage rail; this adds the pipeline-at-a-glance view and a way to remove items.
+
+### Added
+- **Board view on `/feedback`.** A List / Board toggle (a real URL, `?view=board`). Board lays out every item in columns by stage — Submitted through Shipped, plus Declined — each column with a colored stripe and a count. Cards are compact and click through to the item in List view where triage and the thread live. Columns scroll sideways in their own container; the page body never does. An OWNER/ADMIN sees all coaches' items by stage; a coach sees their own.
+- **Delete a report.** A two-step inline confirm (no browser dialog) on each list card. `DELETE /api/feedback/[id]`: OWNER/ADMIN can delete any item, a COACH only their own. Stage history and comments cascade with it. A refusal answers 404, matching the prospect route — confirming an item exists but belongs to someone else is itself a disclosure.
+
 ## [0.5.1.0] - 2026-08-16
 
 Feedback & Roadmap (Phase 1). A coach who hit a bug or wanted a feature had one channel: email Dallas, then hear nothing. Kurt's missing-appointments report is the case in point — it got fixed in 0.5.0.0, but he never saw it acknowledged or shipped. This adds an in-app page where any coach files a bug or feature request and then watches it move through the pipeline in the open — acknowledged, investigating, planned, in progress, shipped — with a reply from the CoachIQ team on the way. The point isn't ticket management for a five-person practice; it's follow-through the reporter can see.
