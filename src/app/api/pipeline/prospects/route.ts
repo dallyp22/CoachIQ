@@ -2,17 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/db";
 import { requireCoach, scopeCoachId, prospectWhere, authzResponse } from "@/lib/authz";
-import { logEvent, BillingEvent } from "@/lib/billing/audit";
 import { STALEST_FIRST } from "@/lib/pipeline/next-activity";
-import { defaultStage, cleanString, readJsonBody } from "@/lib/pipeline/stages";
+import { readJsonBody } from "@/lib/pipeline/stages";
+import {
+  createProspects,
+  terminalFilterForStatus,
+  daysSince,
+  OPPORTUNITY_TYPES,
+  type ProspectInput,
+} from "@/lib/pipeline/writes";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
  * GET  /api/pipeline/prospects — the list view (PRD §6.2)
  * POST /api/pipeline/prospects — add one, or paste a batch (§6.4, §13.5)
+ *
+ * The create logic (open-stage guard, assignee validation, per-row transaction,
+ * audit) lives in createProspects() in src/lib/pipeline/writes.ts so the MCP
+ * create_prospect tool runs the identical logic.
  */
 
-const OPPORTUNITY_TYPES = ["COACHING", "FACILITATION", "IMPLEMENTATION", "MULTIPLE"];
 const PAGE_SIZE = 50;
 
 export async function GET(request: NextRequest) {
@@ -38,13 +47,7 @@ export async function GET(request: NextRequest) {
     ...(opportunityType && OPPORTUNITY_TYPES.includes(opportunityType)
       ? { opportunityType: opportunityType as never }
       : {}),
-    ...(status === "open"
-      ? { stage: { terminal: null } }
-      : status === "won"
-        ? { stage: { terminal: "WON" as const } }
-        : status === "lost"
-          ? { stage: { terminal: "LOST" as const } }
-          : {}),
+    ...terminalFilterForStatus(status),
   };
 
   const [total, rows] = await Promise.all([
@@ -147,23 +150,6 @@ async function lastActivityFor(prospectIds: string[]) {
   return out;
 }
 
-function daysSince(from: Date): number {
-  return Math.max(0, (Date.now() - from.getTime()) / 86_400_000);
-}
-
-type ProspectInput = {
-  firstName?: unknown;
-  lastName?: unknown;
-  company?: unknown;
-  needSummary?: unknown;
-  email?: unknown;
-  phone?: unknown;
-  opportunityType?: unknown;
-  notes?: unknown;
-  stageId?: unknown;
-  assignedCoachId?: unknown;
-};
-
 export async function POST(request: NextRequest) {
   let actor;
   try {
@@ -199,130 +185,13 @@ export async function POST(request: NextRequest) {
     coachId = target.id;
   }
 
-  const fallbackStage = await defaultStage();
-  if (!fallbackStage) {
-    return NextResponse.json(
-      { error: "No open pipeline stage exists to place a prospect in" },
-      { status: 409 },
-    );
+  const result = await createProspects(coachId, rows, { coachId: actor.id, userId });
+  if (!result.ok) {
+    // No open stage to place a prospect in.
+    return NextResponse.json({ error: result.message }, { status: 409 });
   }
 
-  // A prospect may only be CREATED into a live, open stage.
-  //
-  // Taking stageId from the body unchecked made this route a second, unguarded
-  // way to set a stage — which is exactly what POST /[id]/stage exists to be the
-  // only one of. Creating straight into the WON stage let convert mint a
-  // billable Client having never written a ProspectStageChange, never audited a
-  // close, and never enforced lostReason; creating into an archived stage
-  // produced a row visible in no stage at all.
-  const openStages = await prisma.pipelineStage.findMany({
-    where: { isArchived: false, terminal: null },
-    select: { id: true },
-  });
-  const openStageIds = new Set(openStages.map((s) => s.id));
-
-  // Same reasoning for the assignee: prospectWhere() matches on
-  // assignedCoachId, so an unvalidated value lets anyone inject a row onto
-  // another coach's board. PATCH already checked this; create did not.
-  const requestedAssignees = new Set(
-    rows.map((r) => cleanString(r.assignedCoachId)).filter((v): v is string => v !== null),
-  );
-  const validAssignees = new Set(
-    requestedAssignees.size === 0
-      ? []
-      : (
-          await prisma.coach.findMany({
-            where: { id: { in: [...requestedAssignees] }, status: { not: "INACTIVE" } },
-            select: { id: true },
-          })
-        ).map((c) => c.id),
-  );
-
-  const created: Array<{ id: string; firstName: string; lastName: string }> = [];
-  const failed: Array<{ name: string; error: string }> = [];
-
-  for (const row of rows) {
-    const firstName = cleanString(row.firstName) ?? "";
-    const lastName = cleanString(row.lastName) ?? "";
-
-    if (!firstName && !lastName) {
-      failed.push({ name: "(missing)", error: "A name is required" });
-      continue;
-    }
-
-    // Email is OPTIONAL here and required on Client. The convert flow prompts
-    // for it. Never coerce a blank to "": clients are unique on
-    // (coachId, email), so a second empty string would collide and the
-    // link-existing-client offer would pair two strangers.
-    const email = cleanString(row.email)?.toLowerCase() ?? null;
-
-    const requestedStage = cleanString(row.stageId);
-    if (requestedStage && !openStageIds.has(requestedStage)) {
-      failed.push({
-        name: `${firstName} ${lastName}`.trim(),
-        error: "That stage is closed or archived — a prospect can only be created in an open stage",
-      });
-      continue;
-    }
-    const stageId = requestedStage ?? fallbackStage.id;
-
-    const requestedAssignee = cleanString(row.assignedCoachId);
-    if (requestedAssignee && !validAssignees.has(requestedAssignee)) {
-      failed.push({ name: `${firstName} ${lastName}`.trim(), error: "Assigned coach not found" });
-      continue;
-    }
-    const assignedCoachId = requestedAssignee;
-
-    try {
-      const prospect = await prisma.$transaction(async (tx) => {
-        const p = await tx.prospect.create({
-          data: {
-            coachId,
-            assignedCoachId,
-            firstName,
-            lastName,
-            company: cleanString(row.company),
-            needSummary: cleanString(row.needSummary),
-            email,
-            phone: cleanString(row.phone),
-            opportunityType:
-              typeof row.opportunityType === "string" &&
-              OPPORTUNITY_TYPES.includes(row.opportunityType)
-                ? (row.opportunityType as never)
-                : "COACHING",
-            notes: cleanString(row.notes),
-            stageId,
-            source: "MANUAL",
-          },
-          select: { id: true, firstName: true, lastName: true, stageId: true },
-        });
-
-        // Created-into-a-stage is a real transition (fromStageId null), so the
-        // funnel reports can see where a lead entered rather than inferring it.
-        await tx.prospectStageChange.create({
-          data: { prospectId: p.id, fromStageId: null, toStageId: p.stageId, changedById: actor.id },
-        });
-
-        return p;
-      });
-
-      created.push({ id: prospect.id, firstName: prospect.firstName, lastName: prospect.lastName });
-    } catch (err) {
-      failed.push({
-        name: `${firstName} ${lastName}`.trim(),
-        error: err instanceof Error ? err.message : "Unknown error",
-      });
-    }
-  }
-
-  if (created.length > 0) {
-    await logEvent(prisma, {
-      event: BillingEvent.PROSPECT_CREATED,
-      actor: userId,
-      payload: { count: created.length, coachId },
-    });
-  }
-
+  const { created, failed } = result;
   // Partial success reports both halves — re-pasting a 40-row tracker to fix
   // one line is miserable.
   const status = created.length === 0 ? 400 : failed.length > 0 ? 207 : 201;

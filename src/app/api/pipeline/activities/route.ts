@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireCoach, scopeCoachId, canAccessProspect, authzResponse } from "@/lib/authz";
 import { refreshNextActivityAt } from "@/lib/pipeline/next-activity";
 import { cleanString, readJsonBody } from "@/lib/pipeline/stages";
+import { createPipelineActivity } from "@/lib/pipeline/writes";
 
 /**
  * POST  /api/pipeline/activities — log something that happened, or plan something
@@ -52,8 +53,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "prospectId is required" }, { status: 400 });
   }
 
-  const prospect = await authorizeProspect(prospectId, coachId);
-  if (!prospect) return NextResponse.json({ error: "Prospect not found" }, { status: 404 });
+  // Authorize the prospect FIRST, before validating kind or resolving an owner.
+  // The owner-resolution below probes coach ids (404 "Coach not found"); running
+  // it before this check would let an unauthorized caller learn which coach ids
+  // exist. createPipelineActivity re-checks scope too (defense in depth).
+  if (!(await authorizeProspect(prospectId, coachId))) {
+    return NextResponse.json({ error: "Prospect not found" }, { status: 404 });
+  }
 
   const kind = typeof body?.kind === "string" && KINDS.includes(body.kind) ? body.kind : null;
   if (!kind) {
@@ -63,7 +69,9 @@ export async function POST(request: NextRequest) {
   const activityAt = parseDate(body?.activityAt) ?? new Date();
 
   // Owner defaults to the person doing it. An explicit owner lets Todd plan a
-  // call for Kurt, which is the whole reason the field is a dropdown.
+  // call for Kurt, which is the whole reason the field is a dropdown. This
+  // resolution stays in the route (it needs a Coach lookup for the 404); the
+  // create + next-activity transaction is the shared service.
   let ownerId: string | null = actor.id;
   if ("ownerId" in body) {
     const requested = cleanString(body.ownerId);
@@ -76,27 +84,18 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const activity = await prisma.$transaction(async (tx) => {
-    const created = await tx.pipelineActivity.create({
-      data: {
-        prospectId,
-        kind: kind as never,
-        activityAt,
-        notes: cleanString(body?.notes),
-        ownerId,
-        // A LOGGED activity already happened, so it is complete on arrival.
-        // Without this it would look like an open plan forever and keep
-        // reappearing as the prospect's "next activity".
-        completedAt: kind === "LOGGED" ? activityAt : null,
-      },
-      select: { id: true, kind: true, activityAt: true, notes: true, completedAt: true },
-    });
-
-    await refreshNextActivityAt(tx, prospectId);
-    return created;
+  const result = await createPipelineActivity({
+    prospectId,
+    kind: kind as "LOGGED" | "PLANNED",
+    activityAt,
+    notes: cleanString(body?.notes),
+    ownerId,
+    scopeCoachId: coachId,
   });
-
-  return NextResponse.json({ activity }, { status: 201 });
+  if (!result.ok) {
+    return NextResponse.json({ error: "Prospect not found" }, { status: 404 });
+  }
+  return NextResponse.json({ activity: result.activity }, { status: 201 });
 }
 
 export async function PATCH(request: NextRequest) {
