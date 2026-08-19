@@ -11,6 +11,8 @@ import {
 } from "@/lib/authz";
 import { searchSessions } from "@/lib/search";
 import { getPracticeOverview } from "@/lib/practice-stats";
+import { buildDailyBrief } from "@/lib/daily-brief";
+import { listUpcomingMeetings } from "@/lib/calendar";
 import { createClients } from "@/lib/clients";
 import {
   createProspects,
@@ -430,6 +432,93 @@ export function registerCoachIqTools(server: CoachIqMcpServer) {
           },
         });
         return jsonResult({ count: items.length, feedback: items });
+      } catch (err) {
+        return errorResult(err);
+      }
+    }
+  );
+
+  // ─── get_daily_brief (read) ─────────────────────────────
+  server.registerTool(
+    "get_daily_brief",
+    {
+      description:
+        "Get today's start-of-day briefing for the signed-in coach: today's coaching " +
+        "schedule, and for each session a short prep (what to remember, an opening " +
+        "question, open action items) plus a summary of the day's tone and billable " +
+        "hours. Built from the coach's Google Calendar and their clients' session " +
+        "history. An OWNER/ADMIN may pass coachId to view another coach's day.",
+      inputSchema: {
+        coachId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe("OWNER/ADMIN only: view this coach's brief instead of your own."),
+      },
+    },
+    async ({ coachId }, extra) => {
+      try {
+        const coach = await resolveMcpCoach(extra);
+        // One coach's day. A COACH is pinned to themselves; OWNER/ADMIN default
+        // to their own brief and may target another via coachId.
+        const briefCoachId = scopeCoachId(coach, coachId) ?? coach.id;
+        const result = await buildDailyBrief(briefCoachId);
+        if (result.status === "no_calendar") {
+          return jsonResult({
+            ok: false,
+            error:
+              "No Google Calendar is connected for this coach, so a daily brief can't be built.",
+          });
+        }
+        return jsonResult(result);
+      } catch (err) {
+        return errorResult(err);
+      }
+    }
+  );
+
+  // ─── get_upcoming_meetings (read) ───────────────────────
+  server.registerTool(
+    "get_upcoming_meetings",
+    {
+      description:
+        "List the signed-in coach's upcoming coaching meetings from their Google " +
+        "Calendar over the next N days (default 7). Each meeting includes its title, " +
+        "start/end time, duration, and the matched client (when a known client is on " +
+        "the invite). Use this for 'what's on my schedule', 'who am I meeting this " +
+        "week', or 'when is my next session with X'. An OWNER/ADMIN may pass coachId.",
+      inputSchema: {
+        daysAhead: z
+          .number()
+          .int()
+          .min(1)
+          .max(30)
+          .optional()
+          .describe("How many days ahead to look (default 7, max 30)."),
+        coachId: z
+          .string()
+          .uuid()
+          .optional()
+          .describe("OWNER/ADMIN only: view this coach's calendar instead of your own."),
+      },
+    },
+    async ({ daysAhead = 7, coachId }, extra) => {
+      try {
+        const coach = await resolveMcpCoach(extra);
+        const scopedCoachId = scopeCoachId(coach, coachId) ?? coach.id;
+        const result = await listUpcomingMeetings(scopedCoachId, daysAhead * 24);
+        if (result.status === "no_calendar") {
+          return jsonResult({
+            ok: false,
+            error: "No Google Calendar is connected for this coach.",
+          });
+        }
+        return jsonResult({
+          ok: true,
+          daysAhead,
+          count: result.count,
+          meetings: result.meetings,
+        });
       } catch (err) {
         return errorResult(err);
       }

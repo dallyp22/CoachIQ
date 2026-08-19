@@ -3,6 +3,17 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.7.1.0] - 2026-08-19
+
+Daily brief + upcoming meetings over MCP. The two things a coach most wants to ask Claude — "brief me on my day" and "what's on my schedule" — are now tools.
+
+### Added
+- **`get_daily_brief`** — today's start-of-day briefing for the signed-in coach: the coaching schedule, per-session prep (what to remember, an opening question, open action items), and a summary of the day's tone and billable hours. Same brief the web app shows. OWNER/ADMIN may pass a coachId to view another coach's day.
+- **`get_upcoming_meetings`** — the coach's upcoming coaching meetings from their Google Calendar over the next N days (default 7), each with time, duration, and the matched client. Answers "what's my week", "when's my next session with X".
+
+### Changed
+- Extracted the daily-brief assembly into `src/lib/daily-brief.ts` (`buildDailyBrief`) and added `src/lib/calendar.ts` (`listUpcomingMeetings`), so the HTTP route and the MCP tool share one implementation. Both reuse the existing Google Calendar helpers and the display-filter (title match OR known-client-on-invite) the Meetings page uses. Per-coach scoped like every other tool.
+
 ## [0.7.0.1] - 2026-08-19
 
 MCP auth hotfix. The first live connection authenticated fine (Clerk OAuth completed, the request reached the server as a 200) but every tool answered "No authenticated user on this MCP request" — mcp-handler threads the verified `authInfo` into the tool callback in a shape our `extractUserId` didn't read (and a tool with an empty input schema shifts the args/context positions too). Now the caller's identity is read straight from the request context via `auth({ acceptsToken: "oauth_token" })`, with the context-arg read kept as a fast path. Independent of mcp-handler/SDK version skew.
