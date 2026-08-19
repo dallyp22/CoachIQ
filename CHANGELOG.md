@@ -3,6 +3,10 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.7.0.1] - 2026-08-19
+
+MCP auth hotfix. The first live connection authenticated fine (Clerk OAuth completed, the request reached the server as a 200) but every tool answered "No authenticated user on this MCP request" — mcp-handler threads the verified `authInfo` into the tool callback in a shape our `extractUserId` didn't read (and a tool with an empty input schema shifts the args/context positions too). Now the caller's identity is read straight from the request context via `auth({ acceptsToken: "oauth_token" })`, with the context-arg read kept as a fast path. Independent of mcp-handler/SDK version skew.
+
 ## [0.7.0.0] - 2026-08-19
 
 MCP server. Todd, Kurt, Joel, and Dallas can now talk to CoachIQ straight from Claude — "what did I discuss with Acme about succession?", "give me the pipeline", "log that I called this prospect" — using the same account and the same permissions as the website. A remote MCP server hosts the tools; Clerk OAuth signs each coach in and scopes every call to exactly what their role can see, so a COACH reaches only their own clients and an OWNER sees the whole practice. Read plus safe writes only — billing stays on the website, nothing here can send an invoice.

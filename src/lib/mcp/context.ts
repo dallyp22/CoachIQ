@@ -1,16 +1,45 @@
+import { auth } from "@clerk/nextjs/server";
 import { AuthzError, resolveCoachByUserId, type ResolvedCoach } from "@/lib/authz";
 import type { CoachRole } from "@/generated/prisma/enums";
 
 /**
- * mcp-handler and the MCP SDK ship slightly different AuthInfo types, so we read
- * the one field we need — the verified token's `extra.userId` — defensively off
- * the request context rather than importing either package's shape.
+ * Pull the verified Clerk userId off the tool's context argument, if it is there.
+ * mcp-handler and the MCP SDK ship different context shapes across versions
+ * (and a tool with an empty input schema can shift where this argument lands),
+ * so this is best-effort — the auth() fallback in resolveUserId is the reliable
+ * source.
  */
 function extractUserId(extra: unknown): string | undefined {
   const authInfo = (extra as { authInfo?: { extra?: Record<string, unknown> } } | undefined)
     ?.authInfo;
   const userId = authInfo?.extra?.userId;
   return typeof userId === "string" ? userId : undefined;
+}
+
+/**
+ * The reliable path: read the OAuth-token identity straight from the request
+ * context via Clerk. The MCP tool runs inside the same Next.js request that
+ * withMcpAuth already authenticated, so auth({ acceptsToken: "oauth_token" })
+ * resolves the same verified token — independent of how mcp-handler threads
+ * authInfo into the tool argument. Falls back to the context argument first
+ * (fast, and what the unit tests exercise), then to auth().
+ */
+async function resolveUserId(extra: unknown): Promise<string | undefined> {
+  const fromArg = extractUserId(extra);
+  if (fromArg) return fromArg;
+  try {
+    const { userId } = await auth({ acceptsToken: "oauth_token" });
+    if (userId) return userId;
+    // Neither path yielded a user. Log the context-arg keys (no values) so a
+    // recurrence is diagnosable from the shape without leaking token data.
+    const keys =
+      extra && typeof extra === "object" ? Object.keys(extra as object).join(",") : typeof extra;
+    console.error(`[mcp] no userId: auth() empty and context arg keys=[${keys}]`);
+    return undefined;
+  } catch (err) {
+    console.error("[mcp] auth() fallback threw:", err instanceof Error ? err.message : err);
+    return undefined;
+  }
 }
 
 /**
@@ -39,7 +68,7 @@ export async function resolveMcpActor(
   extra: unknown,
   minRole: CoachRole = "COACH"
 ): Promise<{ coach: ResolvedCoach; userId: string }> {
-  const userId = extractUserId(extra);
+  const userId = await resolveUserId(extra);
   if (!userId) {
     throw new AuthzError(401, "No authenticated user on this MCP request.", "unauthenticated");
   }
