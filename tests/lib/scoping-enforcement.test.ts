@@ -34,6 +34,17 @@ const PUBLIC: Record<string, string> = {
   "api/cron/workday-sync/route.ts": "cron; CRON_SECRET auth, practice-wide by design",
   "api/cron/invoice-generation/route.ts": "cron; CRON_SECRET auth, practice-wide by design",
   "api/cron/start-of-day/route.ts": "cron; CRON_SECRET auth, currently unscheduled",
+  // MCP server: authenticated by a verified Clerk OAuth token (withMcpAuth,
+  // required:true) rather than a browser session, and every tool resolves a
+  // coach via resolveMcpCoach before touching data. The "MCP auth invariant"
+  // test below locks both halves so this exemption cannot rot.
+  "api/[transport]/route.ts":
+    "MCP server; withMcpAuth gates the token, each tool calls resolveMcpCoach to scope",
+  // Truly public: OAuth discovery metadata (RFC 9728 / RFC 8414). No coach data.
+  ".well-known/oauth-protected-resource/mcp/route.ts":
+    "public; OAuth protected-resource metadata, carries no coach data",
+  ".well-known/oauth-authorization-server/route.ts":
+    "public; OAuth authorization-server metadata proxied from Clerk, no coach data",
   "sign-in/[[...sign-in]]/page.tsx": "the sign-in page itself",
   "no-access/page.tsx": "shown precisely when coach resolution fails",
   "layout.tsx": "root layout, renders no coach-owned data",
@@ -121,6 +132,30 @@ describe("coach scoping enforcement", () => {
       wrong,
       `Server components must use requireCoachPage (which redirects) rather than requireCoach:\n  ${wrong.join("\n  ")}`
     ).toEqual([]);
+  });
+
+  it("the MCP auth invariant holds — the transport is token-gated and its tools resolve a coach", () => {
+    // api/[transport]/route.ts is PUBLIC only because it authenticates via a
+    // verified Clerk OAuth token (withMcpAuth, required:true) instead of a
+    // browser session, and every tool resolves a coach before touching data.
+    // If either half disappears, this exemption becomes a data leak — so lock
+    // both, the same way the dashboard-layout gate test protects its exemptions.
+    const transport = files.find((f) => f.rel === "api/[transport]/route.ts");
+    expect(transport, "api/[transport]/route.ts is missing").toBeDefined();
+    expect(
+      transport!.source.includes("withMcpAuth"),
+      "the MCP transport no longer wraps withMcpAuth — it is now unauthenticated"
+    ).toBe(true);
+    expect(
+      /required:\s*true/.test(transport!.source),
+      "withMcpAuth is no longer required:true — anonymous MCP calls would be admitted"
+    ).toBe(true);
+
+    const tools = readFileSync(join(ROOT, "..", "lib", "mcp", "tools.ts"), "utf8");
+    expect(
+      tools.includes("resolveMcpCoach"),
+      "MCP tools no longer resolve a coach — they would run unscoped"
+    ).toBe(true);
   });
 
   it("no surface reaches a practice-wide billing or sync helper without an ADMIN floor", () => {
