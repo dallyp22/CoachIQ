@@ -25,6 +25,7 @@ vi.mock("@/lib/db", () => ({
 
 import {
   requireCoach,
+  resolveCoachByUserId,
   canAccess,
   scopeCoachId,
   clientWhere,
@@ -175,6 +176,53 @@ describe("requireCoach — status and role gates", () => {
 
   it("does not leak the status field to callers", async () => {
     const coach = await requireCoach();
+    expect(coach).not.toHaveProperty("status");
+  });
+});
+
+describe("resolveCoachByUserId — the MCP entry point", () => {
+  // The MCP server has a verified Clerk userId from an OAuth token, not a
+  // browser session. resolveCoachByUserId must apply the identical resolution
+  // and gates requireCoach does, without ever calling auth().
+
+  it("resolves an already-linked coach from the fast path (no Clerk round-trip)", async () => {
+    mocks.coachFindUnique.mockResolvedValue(TODD);
+    const coach = await resolveCoachByUserId("user_123");
+    expect(coach.id).toBe("coach-todd");
+    expect(mocks.auth).not.toHaveBeenCalled();
+    expect(mocks.currentUser).not.toHaveBeenCalled();
+  });
+
+  it("enforces the same role floor as the web path (COACH cannot reach ADMIN)", async () => {
+    mocks.coachFindUnique.mockResolvedValue(KURT);
+    await expect(resolveCoachByUserId("user_123", "ADMIN")).rejects.toMatchObject({
+      status: 403,
+      code: "forbidden",
+    });
+  });
+
+  it("denies a deactivated coach", async () => {
+    mocks.coachFindUnique.mockResolvedValue({ ...KURT, status: "INACTIVE" });
+    await expect(resolveCoachByUserId("user_123")).rejects.toMatchObject({
+      status: 403,
+      code: "inactive",
+    });
+  });
+
+  it("denies a Clerk user with no coach row (never signed into the web app)", async () => {
+    mocks.coachFindUnique.mockResolvedValue(null);
+    // Over an oauth_token there is no session; currentUser() yields null, so the
+    // link fallback cannot fire and the caller is correctly refused.
+    mocks.currentUser.mockResolvedValue(null);
+    await expect(resolveCoachByUserId("user_unlinked")).rejects.toMatchObject({
+      status: 403,
+      code: "no_coach",
+    });
+  });
+
+  it("does not leak the status field to callers", async () => {
+    mocks.coachFindUnique.mockResolvedValue(TODD);
+    const coach = await resolveCoachByUserId("user_123");
     expect(coach).not.toHaveProperty("status");
   });
 });

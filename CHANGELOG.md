@@ -3,6 +3,23 @@
 All notable changes to CoachIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/), versions as MAJOR.MINOR.PATCH.MICRO.
 
+## [0.7.0.0] - 2026-08-19
+
+MCP server. Todd, Kurt, Joel, and Dallas can now talk to CoachIQ straight from Claude — "what did I discuss with Acme about succession?", "give me the pipeline", "log that I called this prospect" — using the same account and the same permissions as the website. A remote MCP server hosts the tools; Clerk OAuth signs each coach in and scopes every call to exactly what their role can see, so a COACH reaches only their own clients and an OWNER sees the whole practice. Read plus safe writes only — billing stays on the website, nothing here can send an invoice.
+
+### Added
+- **Remote MCP server at `/api/mcp`** (Streamable HTTP), hosted in the same app on Vercel via `mcp-handler`. Add it as a connector in claude.ai or Claude Desktop, click Connect, sign in with your CoachIQ account — no tokens to manage. Setup guide in `docs/MCP_SETUP.md`.
+- **13 tools.** Reads: `search_sessions` (semantic transcript search), `list_clients`, `get_client`, `get_session`, `list_prospects`, `get_prospect`, `get_analytics`, `list_feedback`. Safe writes: `create_client`, `submit_feedback`, `create_prospect`, `log_prospect_activity`, `move_prospect_stage`. Billing writes are deliberately not exposed.
+- **Clerk OAuth auth** (`@clerk/mcp-tools` + `withMcpAuth`). A verified token resolves to the caller's coach and applies the exact same OWNER/ADMIN/COACH scoping as the web app, through the same `scopeCoachId`/`clientWhere`/`prospectWhere` helpers. Requires OAuth Applications / Dynamic Client Registration enabled in the Clerk dashboard.
+
+### Changed
+- **`requireCoach` now delegates to a new `resolveCoachByUserId(userId)`** in `src/lib/authz.ts`, so the MCP token path reuses identical coach resolution and role gating rather than duplicating it. No behavior change for the web app.
+- **Shared services so the HTTP route and the MCP tool never drift.** Extracted the hybrid session search into `src/lib/search.ts` (`searchSessions`), client creation into `src/lib/clients.ts` (`createClients`), and the pipeline writes into `src/lib/pipeline/writes.ts` (`moveProspectStage`, `createPipelineActivity`, `createProspects`). The `/api/search`, `/api/clients`, and pipeline routes now call these; the MCP tools call the same functions.
+
+### Security
+- The MCP transport is gated by `withMcpAuth(required: true)` and every tool resolves a coach before touching data. The scoping-enforcement test grows an MCP auth invariant so the exemption can't silently drop authentication. Tool errors return a generic message (real detail logged server-side) so a Prisma exception can't leak schema to the caller.
+- **Fixed** a single-shape audit trail: extracting `moveProspectStage`/`createProspects` makes the route and the MCP tool write one canonical `PROSPECT_STAGE_CHANGED` / `PROSPECT_CREATED` payload instead of two divergent shapes.
+
 ## [0.6.0.0] - 2026-08-16
 
 Feedback Phase 2/3. Phase 1 gave each coach a private tracker; this turns it into a shared roadmap and closes the loop back to the reporter. Coaches upvote what they want next, file a report from anywhere in the app, get a nudge when their item moves, and see everything that shipped.
