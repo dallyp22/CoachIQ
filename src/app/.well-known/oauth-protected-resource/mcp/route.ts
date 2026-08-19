@@ -10,7 +10,7 @@ import {
  * withMcpAuth config. Must be publicly reachable (see middleware).
  */
 const handler = protectedResourceHandlerClerk({
-  scopes_supported: ["profile", "email"],
+  scopes_supported: ["openid", "profile", "email"],
 });
 const corsHandler = metadataCorsOptionsRequestHandler();
 
