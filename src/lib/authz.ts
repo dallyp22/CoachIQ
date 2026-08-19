@@ -77,7 +77,27 @@ export async function requireCoach(minRole: CoachRole = "COACH"): Promise<Resolv
   if (!userId) {
     throw new AuthzError(401, "Not signed in.", "unauthenticated");
   }
+  return resolveCoachByUserId(userId, minRole);
+}
 
+/**
+ * Resolve a Clerk userId (obtained however — a browser session OR a verified
+ * MCP OAuth token) to a coach, or throw AuthzError. This is everything
+ * requireCoach does after it has a userId, factored out so the MCP server can
+ * reuse the identical coach-resolution and role-gate rather than duplicating it.
+ *
+ * Note on first-time linking: linkClerkUser() reads currentUser(), which is a
+ * SESSION read. Over an MCP oauth_token there is no session, so the fallback
+ * link (invite-metadata / legacy email match) only fires on the web path. In
+ * practice every coach signs into the web app at least once, stamping
+ * clerkUserId, so the fast findUnique path below serves all MCP calls. A coach
+ * who has NEVER signed in on the web will get a 403 over MCP until they do —
+ * which is the right nudge, not a bug.
+ */
+export async function resolveCoachByUserId(
+  userId: string,
+  minRole: CoachRole = "COACH"
+): Promise<ResolvedCoach> {
   let row = await prisma.coach.findUnique({
     where: { clerkUserId: userId },
     select: COACH_SELECT,

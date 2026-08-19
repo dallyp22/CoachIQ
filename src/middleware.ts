@@ -6,6 +6,12 @@ const isPublicRoute = createRouteMatcher([
   "/sign-up(.*)",
   "/api/webhook/(.*)",
   "/api/cron/(.*)",
+  // MCP server + its OAuth discovery. Auth here is the Clerk OAuth token the
+  // MCP client presents (verified in the route), not a browser session — so
+  // these must NOT redirect unauthenticated browsers to /sign-in.
+  "/api/mcp",
+  "/api/sse",
+  "/.well-known/(.*)",
 ]);
 
 export default clerkMiddleware(async (auth, request) => {
